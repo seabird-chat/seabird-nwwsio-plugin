@@ -7,7 +7,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
-	datadogPlugin "github.com/seabird-chat/seabird-nwwsio-plugin"
+	seabirdPlugin "github.com/seabird-chat/seabird-nwwsio-plugin"
 )
 
 func main() {
@@ -27,16 +27,19 @@ func main() {
 
 	coreURL := os.Getenv("SEABIRD_HOST")
 	coreToken := os.Getenv("SEABIRD_TOKEN")
-	dogstatsdEndpoint := os.Getenv("DOGSTATSD_ENDPOINT")
 
 	// Verify things
 	if coreURL == "" || coreToken == "" {
 		log.Fatal("Missing SEABIRD_HOST or SEABIRD_TOKEN")
 	}
-	if dogstatsdEndpoint == "" {
-		log.Fatal("Missing DOGSTATSD_ENDPOINT")
+
+	nwwsioUsername := os.Getenv("NWWSIO_USERNAME")
+	nwwsioPassword := os.Getenv("NWWSIO_PASSWORD")
+	if nwwsioUsername == "" || nwwsioPassword == "" {
+		log.Fatal("Missing NWWSIO_USERNAME or NWWSIO_PASSWORD")
 	}
-	c, err := datadogPlugin.NewSeabirdClient(coreURL, coreToken, dogstatsdEndpoint)
+
+	c, err := seabirdPlugin.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
 	if err != nil {
 		log.Fatalf("Failed to connect to seabird-core: %s", err)
 	}
