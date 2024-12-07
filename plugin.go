@@ -1,23 +1,29 @@
 package client
 
 import (
+	"encoding/xml"
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 
+	"github.com/go-xmlfmt/xmlfmt"
 	"github.com/seabird-chat/seabird-go"
 	"gosrc.io/xmpp"
 	"gosrc.io/xmpp/stanza"
 )
 
 const (
-	// NWWSPrimaryIP is static, see https://www.weather.gov/nwws/#access
-	NWWSPrimaryIP string = "140.90.59.197"
-	// NWWSSecondaryIP is static, see https://www.weather.gov/nwws/#access
-	NWWSSecondaryIP string = "140.90.113.240"
+	// NWWS Servers, see https://www.weather.gov/nwws/#access
+	NWWSBoulder     string = "nwws-oi-bldr.weather.gov"
+	NWWSCollegePark string = "nwws-oi-cprk.weather.gov"
 	// NWWSServerPort is the port to connect to via XMPP
-	NWWSServerPort string = "5223"
+	NWWSServerPort string = "5222"
+	NWWSDomain     string = "nwws-oi.weather.gov"
+	NWWSResource   string = "nwws"
 )
+
+var Version = "v0.0.0-dev"
 
 // SeabirdClient is a basic client for seabird
 type SeabirdClient struct {
@@ -54,28 +60,51 @@ func handleMessage(s xmpp.Sender, p stanza.Packet) {
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "Body = %s - from = %s\n", msg.Body, msg.From)
-	reply := stanza.Message{Attrs: stanza.Attrs{To: msg.From}, Body: msg.Body}
-	_ = s.Send(reply)
+	xmlMsg, err := xml.Marshal(msg)
+	if err != nil {
+		fmt.Println("ERROR: Failed to marshal message")
+	}
+	fmt.Println(xmlfmt.FormatXML(string(xmlMsg), "\t", "  "))
+	// Disabled - We don't want to reply...just listen
+	//reply := stanza.Message{Attrs: stanza.Attrs{To: msg.From}, Body: msg.Body}
+	//_ = s.Send(reply)
 }
 
 func errorHandler(err error) {
 	fmt.Println(err.Error())
 }
 
+func handleVersion(c xmpp.Sender, p stanza.Packet) {
+	// Type conversion & sanity checks
+	iq, ok := p.(*stanza.IQ)
+	if !ok {
+		return
+	}
+
+	iqResp, err := stanza.NewIQ(stanza.Attrs{Type: "result", From: iq.To, To: iq.From, Id: iq.Id, Lang: "en"})
+	if err != nil {
+		return
+	}
+	iqResp.Version().SetInfo("seabird-nwwsio-plugin", Version, fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH))
+	_ = c.Send(iqResp)
+}
+
 // NewNWWSIOClient returns a new NWWS-IO Client
 func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager, error) {
 	config := xmpp.Config{
 		TransportConfiguration: xmpp.TransportConfiguration{
-			Address: fmt.Sprintf("%s:%s", NWWSPrimaryIP, NWWSServerPort),
+			Address: fmt.Sprintf("%s:%s", NWWSCollegePark, NWWSServerPort),
+			Domain:  NWWSDomain,
 		},
-		Jid:          nwwsioUsername,
+		Jid:          fmt.Sprintf("%s@%s/%s", nwwsioUsername, NWWSDomain, NWWSResource),
 		Credential:   xmpp.Password(nwwsioPassword),
 		StreamLogger: os.Stdout,
-		Insecure:     true,
+		Insecure:     false,
 	}
 
 	router := xmpp.NewRouter()
 	router.HandleFunc("message", handleMessage)
+	router.NewRoute().IQNamespaces("jabber:iq:version").HandlerFunc(handleVersion)
 
 	client, err := xmpp.NewClient(&config, router, errorHandler)
 	if err != nil {
