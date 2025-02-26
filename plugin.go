@@ -17,10 +17,9 @@ const (
 	// NWWS Servers, see https://www.weather.gov/nwws/#access
 	NWWSBoulder     string = "nwws-oi-bldr.weather.gov"
 	NWWSCollegePark string = "nwws-oi-cprk.weather.gov"
-	// NWWSServerPort is the port to connect to via XMPP
-	NWWSServerPort string = "5222"
-	NWWSDomain     string = "nwws-oi.weather.gov"
-	NWWSResource   string = "nwws"
+	NWWSServerPort  string = "5222"
+	NWWSDomain      string = "nwws-oi.weather.gov"
+	NWWSResource    string = "nwws"
 )
 
 var Version = "v0.0.0-dev"
@@ -33,10 +32,11 @@ type SeabirdClient struct {
 
 // NewSeabirdClient returns a new seabird client
 func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPassword string) (*SeabirdClient, error) {
-	seabirdClient, _ := seabird.NewClient(seabirdCoreURL, seabirdCoreToken)
-	//if err != nil {
-	//	return nil, err
-	//}
+	seabirdClient, err := seabird.NewClient(seabirdCoreURL, seabirdCoreToken)
+	if err != nil {
+		return nil, err
+	}
+
 	nwwsioClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword)
 	if err != nil {
 		return nil, err
@@ -85,6 +85,7 @@ func handleVersion(c xmpp.Sender, p stanza.Packet) {
 	if err != nil {
 		return
 	}
+
 	iqResp.Version().SetInfo("seabird-nwwsio-plugin", Version, fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH))
 	_ = c.Send(iqResp)
 }
@@ -113,7 +114,7 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 
 	// If you pass the client to a connection manager, it will handle the reconnect policy
 	// for you automatically.
-	cm := xmpp.NewStreamManager(client, nil)
+	cm := xmpp.NewStreamManager(client, func(c xmpp.Sender))
 	return cm, nil
 }
 
