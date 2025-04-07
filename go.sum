@@ -74,8 +74,8 @@ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZN
 github.com/rs/xid v1.6.0/go.mod h1:7XoLgs4eV+QndskICGsho+ADou8ySMSjJKDIan90Nz0=
 github.com/rs/zerolog v1.34.0 h1:k43nTLIwcTVQAncfCw4KZ2VY6ukYoZaBPNOE8txlOeY=
 github.com/rs/zerolog v1.34.0/go.mod h1:bJsvje4Z08ROH4Nhs5iH600c3IkWhwp44iRc54W6wYQ=
-github.com/seabird-chat/seabird-go v0.6.0 h1:X08yGXNiWDsUrNEpsEEKNeELWXItofOq5U26nFKCAiQ=
-github.com/seabird-chat/seabird-go v0.6.0/go.mod h1:FpQi59t2Yy11PD7v1aD9SioEOsD40DeRAvEXOgbb+1o=
+github.com/seabird-chat/seabird-go v0.6.1 h1:lozrMeQK8rmZCodeI+GsWTiRC/SWYaaMlHKdI8oLQVk=
+github.com/seabird-chat/seabird-go v0.6.1/go.mod h1:KQT3mMkfVMlbwdAJSK/zYsni+S8AiAH7oAbvHDcAYrk=
 github.com/sirupsen/logrus v1.0.5/go.mod h1:pMByvHTf9Beacp5x1UXfOR9xyW/9antXMhjMPG0dEzc=
 github.com/sirupsen/logrus v1.4.2/go.mod h1:tLMulIdttU9McNUspp0xgXVQah82FyeX6MwdIuYE2rE=
 github.com/spf13/pflag v1.0.1/go.mod h1:DYY7MBk1bdzusC3SYhjObp+wFpr4gzcvqqNjLnInEg4=
