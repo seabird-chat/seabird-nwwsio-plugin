@@ -7,7 +7,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-isatty v0.0.20
 	github.com/rs/zerolog v1.34.0
-	github.com/seabird-chat/seabird-go v0.6.0
+	github.com/seabird-chat/seabird-go v0.6.1
 	gosrc.io/xmpp v0.5.1
 )
 
