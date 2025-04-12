@@ -96,7 +96,7 @@ func handleVersion(c xmpp.Sender, p stanza.Packet) {
 
 // getAvailableNWWSIOSite attempts to connect to college park & boulder NWWS-IO
 // sites and will return an XMPP client for the first successful site.
-func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIOClient *xmpp.Client, err error) {
+func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIOConfig *xmpp.Config, err error) {
 	router := xmpp.NewRouter()
 	collegeParkConfig := xmpp.TransportConfiguration{
 		Address: fmt.Sprintf("%s:%s", NWWSCollegePark, NWWSServerPort),
@@ -123,7 +123,7 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 			Address: fmt.Sprintf("%s:%s", NWWSBoulder, NWWSServerPort),
 			Domain:  NWWSDomain,
 		}
-		config := xmpp.Config{
+		config = xmpp.Config{
 			TransportConfiguration: boulderConfig,
 			Jid:                    fmt.Sprintf("%s@%s/%s", nwwsioUsername, NWWSDomain, NWWSResource),
 			Credential:             xmpp.Password(nwwsioPassword),
@@ -142,21 +142,26 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 			log.Println("Failed to connect to all NWWS-IO sites")
 			return nil, fmt.Errorf("Failed to connect to all NWWS-IO sites")
 		}
-		err = client.Disconnect()
-		if err != nil {
-			return nil, err
-		}
 	}
 	err = client.Disconnect()
 	if err != nil {
 		return nil, err
 	}
-	return client, nil
+	return &config, nil
 }
 
 // NewNWWSIOClient returns a new NWWS-IO Client
 func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager, error) {
-	onlineClient, err := getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword)
+	onlineClientConfig, err := getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword)
+	if err != nil {
+		return nil, err
+	}
+
+	router := xmpp.NewRouter()
+	router.HandleFunc("message", handleMessage)
+	router.NewRoute().IQNamespaces("jabber:iq:version").HandlerFunc(handleVersion)
+
+	onlineClient, err := xmpp.NewClient(onlineClientConfig, router, errorHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +171,7 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 }
 
 func nwwsioPostConnect(c xmpp.Sender) {
-	log.Println("Hello World")
+	log.Println("The message stream from the NWWS-IO will begin now...")
 }
 
 // Run runs

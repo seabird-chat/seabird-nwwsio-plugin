@@ -41,7 +41,7 @@ func main() {
 
 	c, err := seabirdPlugin.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
 	if err != nil {
-		log.Fatalf("Failed to connect to seabird-core: %s", err)
+		log.Fatalf("Failed to initialize seabird client: %v", err)
 	}
 
 	err = c.Run()
