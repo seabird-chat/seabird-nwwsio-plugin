@@ -32,15 +32,19 @@ type SeabirdClient struct {
 
 // NewSeabirdClient returns a new seabird client
 func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPassword string) (*SeabirdClient, error) {
+	log.Printf("Connecting to seabird-core: %s", seabirdCoreURL)
 	seabirdClient, err := seabird.NewClient(seabirdCoreURL, seabirdCoreToken)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Succesfully connected to seabird-core: %s", seabirdCoreURL)
 
+	log.Printf("Connecting to NWWS-IO as: %s", nwwsioUsername)
 	nwwsioClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Succesfully connected to NWWS-IO as: %s", nwwsioUsername)
 
 	return &SeabirdClient{
 		Client:     seabirdClient,
@@ -90,40 +94,82 @@ func handleVersion(c xmpp.Sender, p stanza.Packet) {
 	_ = c.Send(iqResp)
 }
 
-// NewNWWSIOClient returns a new NWWS-IO Client
-func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager, error) {
-	config := xmpp.Config{
-		TransportConfiguration: xmpp.TransportConfiguration{
-			Address: fmt.Sprintf("%s:%s", NWWSCollegePark, NWWSServerPort),
-			Domain:  NWWSDomain,
-		},
-		Jid:          fmt.Sprintf("%s@%s/%s", nwwsioUsername, NWWSDomain, NWWSResource),
-		Credential:   xmpp.Password(nwwsioPassword),
-		StreamLogger: os.Stdout,
-		Insecure:     false,
+// getAvailableNWWSIOSite attempts to connect to college park & boulder NWWS-IO
+// sites and will return an XMPP client for the first successful site.
+func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIOClient *xmpp.Client, err error) {
+	router := xmpp.NewRouter()
+	collegeParkConfig := xmpp.TransportConfiguration{
+		Address: fmt.Sprintf("%s:%s", NWWSCollegePark, NWWSServerPort),
+		Domain:  NWWSDomain,
 	}
 
-	router := xmpp.NewRouter()
-	router.HandleFunc("message", handleMessage)
-	router.NewRoute().IQNamespaces("jabber:iq:version").HandlerFunc(handleVersion)
+	config := xmpp.Config{
+		TransportConfiguration: collegeParkConfig,
+		Jid:                    fmt.Sprintf("%s@%s/%s", nwwsioUsername, NWWSDomain, NWWSResource),
+		Credential:             xmpp.Password(nwwsioPassword),
+		Insecure:               false,
+		ConnectTimeout:         3,
+	}
 
 	client, err := xmpp.NewClient(&config, router, errorHandler)
 	if err != nil {
-		log.Fatalf("%+v", err)
+		return nil, err
+	}
+	log.Printf("Testing connection to NWWS-IO site: %s", config.Address)
+	err = client.Connect()
+	if err != nil {
+		log.Printf("Failed to connect to NWWS-IO server %s, trying %s. Error: %+v", NWWSCollegePark, NWWSBoulder, err)
+		boulderConfig := xmpp.TransportConfiguration{
+			Address: fmt.Sprintf("%s:%s", NWWSBoulder, NWWSServerPort),
+			Domain:  NWWSDomain,
+		}
+		config := xmpp.Config{
+			TransportConfiguration: boulderConfig,
+			Jid:                    fmt.Sprintf("%s@%s/%s", nwwsioUsername, NWWSDomain, NWWSResource),
+			Credential:             xmpp.Password(nwwsioPassword),
+			Insecure:               false,
+			ConnectTimeout:         3,
+		}
+
+		client, err = xmpp.NewClient(&config, router, errorHandler)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Printf("Testing connection to NWWS-IO site: %s", config.Address)
+		err = client.Connect()
+		if err != nil {
+			log.Println("Failed to connect to all NWWS-IO sites")
+			return nil, fmt.Errorf("Failed to connect to all NWWS-IO sites")
+		}
+		err = client.Disconnect()
+		if err != nil {
+			return nil, err
+		}
+	}
+	err = client.Disconnect()
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// NewNWWSIOClient returns a new NWWS-IO Client
+func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager, error) {
+	onlineClient, err := getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword)
+	if err != nil {
+		return nil, err
 	}
 
-	// If you pass the client to a connection manager, it will handle the reconnect policy
-	// for you automatically.
-	cm := xmpp.NewStreamManager(client, nwwsioPostConnect)
+	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect)
 	return cm, nil
 }
 
 func nwwsioPostConnect(c xmpp.Sender) {
-	fmt.Println("Hello World")
+	log.Println("Hello World")
 }
 
 // Run runs
 func (c *SeabirdClient) Run() error {
-	log.Fatal(c.NWWSClient.Run())
-	return nil
+	return c.NWWSClient.Run()
 }
