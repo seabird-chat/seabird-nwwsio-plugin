@@ -121,6 +121,10 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 	if err != nil {
 		return nil, err
 	}
+	// TODO
+	// Discover Multi-User Chat (MUC) Rooms
+	// Discover if we have a Reserved Room Nickname: https://xmpp.org/extensions/xep-0045.html#reservednick
+	// Enter the MUC room: https://xmpp.org/extensions/xep-0045.html#enter
 	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect)
 	return cm, nil
 }
