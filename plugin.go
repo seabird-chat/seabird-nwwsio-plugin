@@ -114,8 +114,12 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 
 	// If you pass the client to a connection manager, it will handle the reconnect policy
 	// for you automatically.
-	cm := xmpp.NewStreamManager(client, func(c xmpp.Sender))
+	cm := xmpp.NewStreamManager(client, nwwsioPostConnect)
 	return cm, nil
+}
+
+func nwwsioPostConnect(c xmpp.Sender) {
+	fmt.Println("Hello World")
 }
 
 // Run runs
