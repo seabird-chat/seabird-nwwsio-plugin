@@ -122,15 +122,37 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 		return nil, err
 	}
 	// TODO
-	// Discover Multi-User Chat (MUC) Rooms
-	// Discover if we have a Reserved Room Nickname: https://xmpp.org/extensions/xep-0045.html#reservednick
-	// Enter the MUC room: https://xmpp.org/extensions/xep-0045.html#enter
+	// On Exit:
+	// c.Send(stanza.Presence{Attrs: stanza.Attrs{
+	//		To:   toJID.Full(),
+	//		Type: stanza.PresenceTypeUnavailable,
+	//	}}
 	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect)
 	return cm, nil
 }
 
 func nwwsioPostConnect(c xmpp.Sender) {
 	log.Println("The message stream from the NWWS-IO will begin now...")
+	err := joinMUC(c, &stanza.Jid{
+		Node:   "nwws",
+		Domain: "conference.nwws-oi.weather.gov",
+		//TODO: This should be nwwsioUsername
+		Resource: "wind.060",
+	})
+	if err != nil {
+		log.Fatalf("Failed to join Multi-user Chat: %v", err)
+	}
+
+}
+
+func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
+	log.Printf("Attempting to join Multi-user chat: %s", toJID.Full())
+	return c.Send(stanza.Presence{Attrs: stanza.Attrs{To: toJID.Full()},
+		Extensions: []stanza.PresExtension{
+			stanza.MucPresence{
+				History: stanza.History{MaxStanzas: stanza.NewNullableInt(0)},
+			}},
+	})
 }
 
 func handleMessage(s xmpp.Sender, p stanza.Packet) {
@@ -146,9 +168,6 @@ func handleMessage(s xmpp.Sender, p stanza.Packet) {
 		fmt.Println("ERROR: Failed to marshal message")
 	}
 	fmt.Println(xmlfmt.FormatXML(string(xmlMsg), "\t", "  "))
-	// Disabled - We don't want to reply...just listen
-	//reply := stanza.Message{Attrs: stanza.Attrs{To: msg.From}, Body: msg.Body}
-	//_ = s.Send(reply)
 }
 
 func errorHandler(err error) {
