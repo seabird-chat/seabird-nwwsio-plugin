@@ -23,3 +23,5 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 )
+
+replace gosrc.io/xmpp => github.com/jaredledvina/go-xmpp v0.0.0-20250412144549-ab19715da354
