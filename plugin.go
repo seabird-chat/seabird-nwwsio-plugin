@@ -4,7 +4,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 
 	"github.com/go-xmlfmt/xmlfmt"
@@ -155,23 +154,82 @@ func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
 	})
 }
 
+/*
+Documentation:
+* https://www.weather.gov/nwws/configuration
+* https://www.weather.gov/tg/head
+
+Example Message Format:
+<message to='enduser@server/laptop' type='groupchat' from='nwws@nwws-oi.weather.gov/nwws-oi'>
+
+<body>KARX issues RR8 valid 2013-05-25T02:20:34Z</body>
+
+<html xmlns='http://jabber.org/protocol/xhtml-im'>
+
+<body xmlns='http://www.w3.org/1999/xhtml'>KARX issues RR8 valid 2013-05-25T02:20:34Z</body>
+
+</html>
+
+<x xmlns='nwws-oi' cccc='KARX' ttaaii='SRUS83' issue='2013-05-25T02:20:34Z' awipsid='RR8ARX' id='10313.6'>
+
+111
+
+# SRUS83 KARX 250220
+
+# RR8ARX
+
+:
+
+: AUTOMATED GAUGE DATA COLLECTED FROM IOWA FLOOD CENTER
+
+:
+
+.A CDGI4 20130524 C DH2100/HGIRP 2.63 : MORGAN CREEK NEAR CEDAR RAPIDS
+
+</x>
+
+</message>
+*/
+
+type NWWSOIMessageXExtension struct {
+	stanza.MsgExtension
+	XMLName xml.Name `xml:"nwws-oi x"`
+	Text    string   `xml:",chardata"`
+	Cccc    string   `xml:"cccc,attr"`
+	Ttaaii  string   `xml:"ttaaii,attr"`
+	Issue   string   `xml:"issue,attr"`
+	AwipsID string   `xml:"awipsid,attr"`
+	ID      string   `xml:"id,attr"`
+}
+
+func init() {
+	stanza.TypeRegistry.MapExtension(stanza.PKTMessage, xml.Name{Space: "nwws-oi", Local: "x"}, NWWSOIMessageXExtension{})
+}
+
 func handleMessage(s xmpp.Sender, p stanza.Packet) {
 	msg, ok := p.(stanza.Message)
 	if !ok {
-		_, _ = fmt.Fprintf(os.Stdout, "Ignoring packet: %T\n", p)
+		log.Printf("Ignoring packet: %T", p)
 		return
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "Body = %s - from = %s\n", msg.Body, msg.From)
+	log.Printf("Message received - From: %s Body: %s", msg.From, msg.Body)
+	log.Printf("Message Debug Info: %s", msg.XMPPFormat())
+	var messageNWWSIOX NWWSOIMessageXExtension
+	if ok := msg.Get(&messageNWWSIOX); ok {
+		log.Printf("Message X Text: %v", messageNWWSIOX.Text)
+	}
 	xmlMsg, err := xml.Marshal(msg)
 	if err != nil {
-		fmt.Println("ERROR: Failed to marshal message")
+		fmt.Printf("ERROR: Failed to marshal message: %s", msg.Id)
 	}
+	fmt.Println("=========== XML Formatted START ===========")
 	fmt.Println(xmlfmt.FormatXML(string(xmlMsg), "\t", "  "))
+	fmt.Println("=========== XML Formatted END ===========")
 }
 
 func errorHandler(err error) {
-	fmt.Println(err.Error())
+	log.Printf("ERROR: %v", err)
 }
 
 func handleVersion(c xmpp.Sender, p stanza.Packet) {
