@@ -2,9 +2,9 @@ package client
 
 import (
 	"fmt"
-	"log"
 	"runtime"
 
+	"github.com/rs/zerolog/log"
 	"github.com/seabird-chat/seabird-go"
 	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
 	"gosrc.io/xmpp"
@@ -32,12 +32,12 @@ type SeabirdClient struct {
 
 // NewSeabirdClient returns a new seabird client
 func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPassword string) (*SeabirdClient, error) {
-	log.Printf("Connecting to seabird-core: %s", seabirdCoreURL)
+	log.Info().Str("url", seabirdCoreURL).Msg("Connecting to seabird-core")
 	seabirdClient, err := seabird.NewClient(seabirdCoreURL, seabirdCoreToken)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Successfully connected to seabird-core: %s", seabirdCoreURL)
+	log.Info().Str("url", seabirdCoreURL).Msg("Successfully connected to seabird-core")
 
 	mucJID := &stanza.Jid{
 		Node:     "nwws",
@@ -45,12 +45,12 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 		Resource: nwwsioUsername,
 	}
 
-	log.Printf("Connecting to NWWS-IO as: %s", nwwsioUsername)
+	log.Info().Str("username", nwwsioUsername).Msg("Connecting to NWWS-IO")
 	nwwsioClient, nwwsXMPPClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword, mucJID)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Successfully connected to NWWS-IO as: %s", nwwsioUsername)
+	log.Info().Str("username", nwwsioUsername).Msg("Successfully connected to NWWS-IO")
 
 	return &SeabirdClient{
 		Client:         seabirdClient,
@@ -61,7 +61,7 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 }
 
 func (c *SeabirdClient) Shutdown() error {
-	log.Println("Shutting down gracefully...")
+	log.Info().Msg("Shutting down gracefully")
 
 	if c.nwwsXMPPClient != nil && c.mucJID != nil {
 		err := c.nwwsXMPPClient.Send(stanza.Presence{
@@ -71,7 +71,7 @@ func (c *SeabirdClient) Shutdown() error {
 			},
 		})
 		if err != nil {
-			log.Printf("Failed to send presence unavailable: %v", err)
+			log.Error().Err(err).Msg("Failed to send presence unavailable")
 		}
 	}
 
@@ -106,10 +106,10 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Testing connection to NWWS-IO site: %s", config.Address)
+	log.Info().Str("site", config.Address).Msg("Testing connection to NWWS-IO site")
 	err = client.Connect()
 	if err != nil {
-		log.Printf("Failed to connect to NWWS-IO server %s, trying %s. Error: %+v", NWWSCollegePark, NWWSBoulder, err)
+		log.Warn().Err(err).Str("failed_site", NWWSCollegePark).Str("trying_site", NWWSBoulder).Msg("Failed to connect to NWWS-IO server, trying backup")
 		boulderConfig := xmpp.TransportConfiguration{
 			Address: fmt.Sprintf("%s:%s", NWWSBoulder, NWWSServerPort),
 			Domain:  NWWSDomain,
@@ -121,10 +121,10 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 			return nil, err
 		}
 
-		log.Printf("Testing connection to NWWS-IO site: %s", config.Address)
+		log.Info().Str("site", config.Address).Msg("Testing connection to NWWS-IO site")
 		err = client.Connect()
 		if err != nil {
-			log.Println("Failed to connect to all NWWS-IO sites")
+			log.Error().Msg("Failed to connect to all NWWS-IO sites")
 			return nil, fmt.Errorf("Failed to connect to all NWWS-IO sites")
 		}
 	}
@@ -157,16 +157,16 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string, mucJID *stanza.Jid) 
 
 func nwwsioPostConnect(mucJID *stanza.Jid) func(xmpp.Sender) {
 	return func(c xmpp.Sender) {
-		log.Println("The message stream from the NWWS-IO will begin now...")
+		log.Info().Msg("The message stream from the NWWS-IO will begin now")
 		err := joinMUC(c, mucJID)
 		if err != nil {
-			log.Fatalf("Failed to join Multi-user Chat: %v", err)
+			log.Fatal().Err(err).Msg("Failed to join Multi-user Chat")
 		}
 	}
 }
 
 func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
-	log.Printf("Attempting to join Multi-user chat: %s", toJID.Full())
+	log.Info().Str("jid", toJID.Full()).Msg("Attempting to join Multi-user chat")
 	return c.Send(stanza.Presence{Attrs: stanza.Attrs{To: toJID.Full()},
 		Extensions: []stanza.PresExtension{
 			stanza.MucPresence{
@@ -178,20 +178,20 @@ func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
 func handleMessage(s xmpp.Sender, p stanza.Packet) {
 	msg, ok := p.(stanza.Message)
 	if !ok {
-		log.Printf("Ignoring packet: %T", p)
+		log.Debug().Str("type", fmt.Sprintf("%T", p)).Msg("Ignoring packet")
 		return
 	}
 
-	log.Printf("Message Debug Info: %s", msg.XMPPFormat())
+	log.Debug().Str("format", msg.XMPPFormat()).Msg("Message Debug Info")
 
 	var messageNWWSIOX nwwsio.NWWSOIMessageXExtension
 	if ok := msg.Get(&messageNWWSIOX); ok {
-		log.Printf("Message X Text: %v", messageNWWSIOX.Text)
+		log.Debug().Str("text", messageNWWSIOX.Text).Msg("Message X Text")
 	}
 }
 
 func errorHandler(err error) {
-	log.Printf("ERROR: %v", err)
+	log.Error().Err(err).Msg("XMPP error")
 }
 
 func handleVersion(c xmpp.Sender, p stanza.Packet) {

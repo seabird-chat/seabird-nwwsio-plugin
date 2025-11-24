@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -9,41 +8,37 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	seabirdPlugin "github.com/seabird-chat/seabird-nwwsio-plugin"
 )
 
 func main() {
-	// Attempt to load from .env if it exists
 	_ = godotenv.Load()
 
-	var logger zerolog.Logger
-
 	if isatty.IsTerminal(os.Stdout.Fd()) {
-		logger = zerolog.New(zerolog.NewConsoleWriter())
+		log.Logger = zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
 	} else {
-		logger = zerolog.New(os.Stdout)
+		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 
-	logger = logger.With().Timestamp().Logger()
-	logger.Level(zerolog.InfoLevel)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	coreURL := os.Getenv("SEABIRD_HOST")
 	coreToken := os.Getenv("SEABIRD_TOKEN")
 
-	// Verify things
 	if coreURL == "" || coreToken == "" {
-		log.Fatal("Missing SEABIRD_HOST or SEABIRD_TOKEN")
+		log.Fatal().Msg("Missing SEABIRD_HOST or SEABIRD_TOKEN")
 	}
 
 	nwwsioUsername := os.Getenv("NWWSIO_USERNAME")
 	nwwsioPassword := os.Getenv("NWWSIO_PASSWORD")
 	if nwwsioUsername == "" || nwwsioPassword == "" {
-		log.Fatal("Missing NWWSIO_USERNAME or NWWSIO_PASSWORD")
+		log.Fatal().Msg("Missing NWWSIO_USERNAME or NWWSIO_PASSWORD")
 	}
 
 	c, err := seabirdPlugin.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
 	if err != nil {
-		log.Fatalf("Failed to initialize seabird client: %v", err)
+		log.Fatal().Err(err).Msg("Failed to initialize seabird client")
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -52,13 +47,13 @@ func main() {
 	go func() {
 		<-sigChan
 		if err := c.Shutdown(); err != nil {
-			log.Printf("Error during shutdown: %v", err)
+			log.Error().Err(err).Msg("Error during shutdown")
 		}
 		os.Exit(0)
 	}()
 
 	err = c.Run()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("Failed to run client")
 	}
 }
