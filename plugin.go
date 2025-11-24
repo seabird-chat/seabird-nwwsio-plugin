@@ -125,22 +125,22 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 	//		To:   toJID.Full(),
 	//		Type: stanza.PresenceTypeUnavailable,
 	//	}}
-	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect)
+	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect(nwwsioUsername))
 	return cm, nil
 }
 
-func nwwsioPostConnect(c xmpp.Sender) {
-	log.Println("The message stream from the NWWS-IO will begin now...")
-	err := joinMUC(c, &stanza.Jid{
-		Node:   "nwws",
-		Domain: "conference.nwws-oi.weather.gov",
-		//TODO: This should be nwwsioUsername
-		Resource: "wind.060",
-	})
-	if err != nil {
-		log.Fatalf("Failed to join Multi-user Chat: %v", err)
+func nwwsioPostConnect(nwwsioUsername string) func(xmpp.Sender) {
+	return func(c xmpp.Sender) {
+		log.Println("The message stream from the NWWS-IO will begin now...")
+		err := joinMUC(c, &stanza.Jid{
+			Node:     "nwws",
+			Domain:   "conference.nwws-oi.weather.gov",
+			Resource: nwwsioUsername,
+		})
+		if err != nil {
+			log.Fatalf("Failed to join Multi-user Chat: %v", err)
+		}
 	}
-
 }
 
 func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
