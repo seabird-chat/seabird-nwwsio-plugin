@@ -37,7 +37,7 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Succesfully connected to seabird-core: %s", seabirdCoreURL)
+	log.Printf("Successfully connected to seabird-core: %s", seabirdCoreURL)
 
 	mucJID := &stanza.Jid{
 		Node:     "nwws",
@@ -50,7 +50,7 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Succesfully connected to NWWS-IO as: %s", nwwsioUsername)
+	log.Printf("Successfully connected to NWWS-IO as: %s", nwwsioUsername)
 
 	return &SeabirdClient{
 		Client:         seabirdClient,
