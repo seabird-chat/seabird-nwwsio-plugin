@@ -1,13 +1,12 @@
 package client
 
 import (
-	"encoding/xml"
 	"fmt"
 	"log"
 	"runtime"
 
-	"github.com/go-xmlfmt/xmlfmt"
 	"github.com/seabird-chat/seabird-go"
+	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
 	"gosrc.io/xmpp"
 	"gosrc.io/xmpp/stanza"
 )
@@ -154,58 +153,6 @@ func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
 	})
 }
 
-/*
-Documentation:
-* https://www.weather.gov/nwws/configuration
-* https://www.weather.gov/tg/head
-
-Example Message Format:
-<message to='enduser@server/laptop' type='groupchat' from='nwws@nwws-oi.weather.gov/nwws-oi'>
-
-<body>KARX issues RR8 valid 2013-05-25T02:20:34Z</body>
-
-<html xmlns='http://jabber.org/protocol/xhtml-im'>
-
-<body xmlns='http://www.w3.org/1999/xhtml'>KARX issues RR8 valid 2013-05-25T02:20:34Z</body>
-
-</html>
-
-<x xmlns='nwws-oi' cccc='KARX' ttaaii='SRUS83' issue='2013-05-25T02:20:34Z' awipsid='RR8ARX' id='10313.6'>
-
-111
-
-# SRUS83 KARX 250220
-
-# RR8ARX
-
-:
-
-: AUTOMATED GAUGE DATA COLLECTED FROM IOWA FLOOD CENTER
-
-:
-
-.A CDGI4 20130524 C DH2100/HGIRP 2.63 : MORGAN CREEK NEAR CEDAR RAPIDS
-
-</x>
-
-</message>
-*/
-
-type NWWSOIMessageXExtension struct {
-	stanza.MsgExtension
-	XMLName xml.Name `xml:"nwws-oi x"`
-	Text    string   `xml:",chardata"`
-	Cccc    string   `xml:"cccc,attr"`
-	Ttaaii  string   `xml:"ttaaii,attr"`
-	Issue   string   `xml:"issue,attr"`
-	AwipsID string   `xml:"awipsid,attr"`
-	ID      string   `xml:"id,attr"`
-}
-
-func init() {
-	stanza.TypeRegistry.MapExtension(stanza.PKTMessage, xml.Name{Space: "nwws-oi", Local: "x"}, NWWSOIMessageXExtension{})
-}
-
 func handleMessage(s xmpp.Sender, p stanza.Packet) {
 	msg, ok := p.(stanza.Message)
 	if !ok {
@@ -213,19 +160,12 @@ func handleMessage(s xmpp.Sender, p stanza.Packet) {
 		return
 	}
 
-	log.Printf("Message received - From: %s Body: %s", msg.From, msg.Body)
 	log.Printf("Message Debug Info: %s", msg.XMPPFormat())
-	var messageNWWSIOX NWWSOIMessageXExtension
+
+	var messageNWWSIOX nwwsio.NWWSOIMessageXExtension
 	if ok := msg.Get(&messageNWWSIOX); ok {
 		log.Printf("Message X Text: %v", messageNWWSIOX.Text)
 	}
-	xmlMsg, err := xml.Marshal(msg)
-	if err != nil {
-		fmt.Printf("ERROR: Failed to marshal message: %s", msg.Id)
-	}
-	fmt.Println("=========== XML Formatted START ===========")
-	fmt.Println(xmlfmt.FormatXML(string(xmlMsg), "\t", "  "))
-	fmt.Println("=========== XML Formatted END ===========")
 }
 
 func errorHandler(err error) {
