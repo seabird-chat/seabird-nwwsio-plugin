@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
@@ -43,6 +45,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize seabird client: %v", err)
 	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		if err := c.Shutdown(); err != nil {
+			log.Printf("Error during shutdown: %v", err)
+		}
+		os.Exit(0)
+	}()
 
 	err = c.Run()
 	if err != nil {

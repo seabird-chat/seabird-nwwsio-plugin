@@ -25,7 +25,9 @@ var Version = "v0.0.0-dev"
 // SeabirdClient is a basic client for seabird
 type SeabirdClient struct {
 	*seabird.Client
-	NWWSClient *xmpp.StreamManager
+	NWWSClient     *xmpp.StreamManager
+	nwwsXMPPClient *xmpp.Client
+	mucJID         *stanza.Jid
 }
 
 // NewSeabirdClient returns a new seabird client
@@ -37,21 +39,50 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 	}
 	log.Printf("Succesfully connected to seabird-core: %s", seabirdCoreURL)
 
+	mucJID := &stanza.Jid{
+		Node:     "nwws",
+		Domain:   "conference.nwws-oi.weather.gov",
+		Resource: nwwsioUsername,
+	}
+
 	log.Printf("Connecting to NWWS-IO as: %s", nwwsioUsername)
-	nwwsioClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword)
+	nwwsioClient, nwwsXMPPClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword, mucJID)
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("Succesfully connected to NWWS-IO as: %s", nwwsioUsername)
 
 	return &SeabirdClient{
-		Client:     seabirdClient,
-		NWWSClient: nwwsioClient,
+		Client:         seabirdClient,
+		NWWSClient:     nwwsioClient,
+		nwwsXMPPClient: nwwsXMPPClient,
+		mucJID:         mucJID,
 	}, nil
 }
 
-func (c *SeabirdClient) close() error {
-	return c.Client.Close()
+func (c *SeabirdClient) Shutdown() error {
+	log.Println("Shutting down gracefully...")
+
+	if c.nwwsXMPPClient != nil && c.mucJID != nil {
+		err := c.nwwsXMPPClient.Send(stanza.Presence{
+			Attrs: stanza.Attrs{
+				To:   c.mucJID.Full(),
+				Type: stanza.PresenceTypeUnavailable,
+			},
+		})
+		if err != nil {
+			log.Printf("Failed to send presence unavailable: %v", err)
+		}
+	}
+
+	if c.NWWSClient != nil {
+		c.NWWSClient.Stop()
+	}
+
+	if c.Client != nil {
+		return c.Client.Close()
+	}
+	return nil
 }
 
 // getAvailableNWWSIOSite attempts to connect to college park & boulder NWWS-IO
@@ -105,10 +136,10 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 }
 
 // NewNWWSIOClient returns a new NWWS-IO Client
-func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager, error) {
+func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string, mucJID *stanza.Jid) (*xmpp.StreamManager, *xmpp.Client, error) {
 	onlineClientConfig, err := getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	router := xmpp.NewRouter()
@@ -117,26 +148,17 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string) (*xmpp.StreamManager
 
 	onlineClient, err := xmpp.NewClient(onlineClientConfig, router, errorHandler)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	// TODO
-	// On Exit:
-	// c.Send(stanza.Presence{Attrs: stanza.Attrs{
-	//		To:   toJID.Full(),
-	//		Type: stanza.PresenceTypeUnavailable,
-	//	}}
-	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect(nwwsioUsername))
-	return cm, nil
+
+	cm := xmpp.NewStreamManager(onlineClient, nwwsioPostConnect(mucJID))
+	return cm, onlineClient, nil
 }
 
-func nwwsioPostConnect(nwwsioUsername string) func(xmpp.Sender) {
+func nwwsioPostConnect(mucJID *stanza.Jid) func(xmpp.Sender) {
 	return func(c xmpp.Sender) {
 		log.Println("The message stream from the NWWS-IO will begin now...")
-		err := joinMUC(c, &stanza.Jid{
-			Node:     "nwws",
-			Domain:   "conference.nwws-oi.weather.gov",
-			Resource: nwwsioUsername,
-		})
+		err := joinMUC(c, mucJID)
 		if err != nil {
 			log.Fatalf("Failed to join Multi-user Chat: %v", err)
 		}
