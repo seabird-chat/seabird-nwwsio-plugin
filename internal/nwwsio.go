@@ -171,13 +171,35 @@ var DataTable = []DataEntry{
 	{"Z", "-", "", "", "", "", nil},
 }
 
-func (n *NWWSOIMessageXExtension) parseTtaaii() error {
-	splitTtaaii := strings.Split(n.Ttaaii, "")
-	if len(splitTtaaii) != 6 {
-		return fmt.Errorf("Failed to parse Ttaaii: %s", n.Ttaaii)
+type WMOProductID struct {
+	T1 string
+	T2 string
+	A1 string
+	A2 string
+	II string
+}
+
+func (n *NWWSOIMessageXExtension) ParseTtaaii() (*WMOProductID, error) {
+	if len(n.Ttaaii) != 6 {
+		return nil, fmt.Errorf("invalid Ttaaii length: expected 6, got %d", len(n.Ttaaii))
 	}
-	_ = splitTtaaii[0]
-	return nil
+
+	return &WMOProductID{
+		T1: string(n.Ttaaii[0]),
+		T2: string(n.Ttaaii[1]),
+		A1: string(n.Ttaaii[2]),
+		A2: string(n.Ttaaii[3]),
+		II: n.Ttaaii[4:6],
+	}, nil
+}
+
+func (w *WMOProductID) GetDataType() string {
+	for _, entry := range DataTable {
+		if entry.T1 == w.T1 {
+			return entry.DataType
+		}
+	}
+	return "Unknown"
 }
 
 func init() {

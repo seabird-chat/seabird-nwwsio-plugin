@@ -186,7 +186,18 @@ func handleMessage(s xmpp.Sender, p stanza.Packet) {
 
 	var messageNWWSIOX nwwsio.NWWSOIMessageXExtension
 	if ok := msg.Get(&messageNWWSIOX); ok {
-		log.Debug().Str("text", messageNWWSIOX.Text).Msg("Message X Text")
+		productID, err := messageNWWSIOX.ParseTtaaii()
+		if err != nil {
+			log.Warn().Err(err).Str("ttaaii", messageNWWSIOX.Ttaaii).Msg("Failed to parse WMO product ID")
+		} else {
+			log.Info().
+				Str("cccc", messageNWWSIOX.Cccc).
+				Str("ttaaii", messageNWWSIOX.Ttaaii).
+				Str("data_type", productID.GetDataType()).
+				Str("awipsid", messageNWWSIOX.AwipsID).
+				Str("issue", messageNWWSIOX.Issue).
+				Msg("Received weather product")
+		}
 	}
 }
 
