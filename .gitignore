@@ -67,3 +67,4 @@ Temporary Items
 
 # Ignore local .env
 .env
+bin/
