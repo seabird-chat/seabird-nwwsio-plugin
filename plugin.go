@@ -1,11 +1,14 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/seabird-chat/seabird-go"
+	"github.com/seabird-chat/seabird-go/pb"
 	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
 	"gosrc.io/xmpp"
 	"gosrc.io/xmpp/stanza"
@@ -28,6 +31,7 @@ type SeabirdClient struct {
 	NWWSClient     *xmpp.StreamManager
 	nwwsXMPPClient *xmpp.Client
 	mucJID         *stanza.Jid
+	subscriptions  *SubscriptionManager
 }
 
 // NewSeabirdClient returns a new seabird client
@@ -45,19 +49,25 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 		Resource: nwwsioUsername,
 	}
 
+	client := &SeabirdClient{
+		Client:        seabirdClient,
+		mucJID:        mucJID,
+		subscriptions: NewSubscriptionManager(),
+	}
+
+	client.registerCommandHandlers()
+
 	log.Info().Str("username", nwwsioUsername).Msg("Connecting to NWWS-IO")
-	nwwsioClient, nwwsXMPPClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword, mucJID)
+	nwwsioClient, nwwsXMPPClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword, mucJID, client)
 	if err != nil {
 		return nil, err
 	}
 	log.Info().Str("username", nwwsioUsername).Msg("Successfully connected to NWWS-IO")
 
-	return &SeabirdClient{
-		Client:         seabirdClient,
-		NWWSClient:     nwwsioClient,
-		nwwsXMPPClient: nwwsXMPPClient,
-		mucJID:         mucJID,
-	}, nil
+	client.NWWSClient = nwwsioClient
+	client.nwwsXMPPClient = nwwsXMPPClient
+
+	return client, nil
 }
 
 func (c *SeabirdClient) Shutdown() error {
@@ -136,14 +146,16 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword string) (onlineNWWSIO
 }
 
 // NewNWWSIOClient returns a new NWWS-IO Client
-func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string, mucJID *stanza.Jid) (*xmpp.StreamManager, *xmpp.Client, error) {
+func NewNWWSIOClient(nwwsioUsername, nwwsioPassword string, mucJID *stanza.Jid, client *SeabirdClient) (*xmpp.StreamManager, *xmpp.Client, error) {
 	onlineClientConfig, err := getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	router := xmpp.NewRouter()
-	router.HandleFunc("message", handleMessage)
+	router.HandleFunc("message", func(s xmpp.Sender, p stanza.Packet) {
+		handleMessage(s, p, client)
+	})
 	router.NewRoute().IQNamespaces("jabber:iq:version").HandlerFunc(handleVersion)
 
 	onlineClient, err := xmpp.NewClient(onlineClientConfig, router, errorHandler)
@@ -175,7 +187,7 @@ func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
 	})
 }
 
-func handleMessage(s xmpp.Sender, p stanza.Packet) {
+func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 	msg, ok := p.(stanza.Message)
 	if !ok {
 		log.Debug().Str("type", fmt.Sprintf("%T", p)).Msg("Ignoring packet")
@@ -189,16 +201,48 @@ func handleMessage(s xmpp.Sender, p stanza.Packet) {
 		productID, err := messageNWWSIOX.ParseTtaaii()
 		if err != nil {
 			log.Warn().Err(err).Str("ttaaii", messageNWWSIOX.Ttaaii).Msg("Failed to parse WMO product ID")
-		} else {
-			log.Info().
-				Str("cccc", messageNWWSIOX.Cccc).
-				Str("ttaaii", messageNWWSIOX.Ttaaii).
-				Str("data_type", productID.GetDataType()).
-				Str("awipsid", messageNWWSIOX.AwipsID).
-				Str("issue", messageNWWSIOX.Issue).
-				Msg("Received weather product")
+			return
+		}
+
+		log.Info().
+			Str("cccc", messageNWWSIOX.Cccc).
+			Str("ttaaii", messageNWWSIOX.Ttaaii).
+			Str("data_type", productID.GetDataType()).
+			Str("awipsid", messageNWWSIOX.AwipsID).
+			Str("issue", messageNWWSIOX.Issue).
+			Msg("Received weather product")
+
+		subscribers := client.subscriptions.GetStationSubscribers(messageNWWSIOX.Cccc)
+		if len(subscribers) > 0 {
+			alertMsg := fmt.Sprintf(
+				"🌤 Weather Alert from %s\n"+
+					"Type: %s\n"+
+					"AWIPS ID: %s\n"+
+					"Issue Time: %s\n\n"+
+					"%s",
+				messageNWWSIOX.Cccc,
+				productID.GetDataType(),
+				messageNWWSIOX.AwipsID,
+				messageNWWSIOX.Issue,
+				truncateText(messageNWWSIOX.Text, 1000),
+			)
+
+			for _, userID := range subscribers {
+				client.SendPrivateMessage(userID, alertMsg)
+				log.Info().
+					Str("user_id", userID).
+					Str("station", messageNWWSIOX.Cccc).
+					Msg("Sent weather alert to subscriber")
+			}
 		}
 	}
+}
+
+func truncateText(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "...\n[Message truncated]"
 }
 
 func errorHandler(err error) {
@@ -219,6 +263,137 @@ func handleVersion(c xmpp.Sender, p stanza.Packet) {
 
 	iqResp.Version().SetInfo("seabird-nwwsio-plugin", Version, fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH))
 	_ = c.Send(iqResp)
+}
+
+func (c *SeabirdClient) SendMessage(channelID, text string) {
+	ctx := context.Background()
+	_, err := c.Client.Inner.SendMessage(ctx, &pb.SendMessageRequest{
+		ChannelId: channelID,
+		Text:      text,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("channel_id", channelID).Msg("Failed to send message")
+	}
+}
+
+func (c *SeabirdClient) SendPrivateMessage(userID, text string) {
+	ctx := context.Background()
+	_, err := c.Client.Inner.SendPrivateMessage(ctx, &pb.SendPrivateMessageRequest{
+		UserId: userID,
+		Text:   text,
+	})
+	if err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("Failed to send private message")
+	}
+}
+
+func (c *SeabirdClient) registerCommandHandlers() {
+	go c.handleEvents()
+}
+
+func (c *SeabirdClient) handleEvents() {
+	commands := map[string]*pb.CommandMetadata{
+		"noaa": {
+			Name:      "noaa",
+			ShortHelp: "Subscribe to NOAA weather alerts",
+			FullHelp:  "Usage: !noaa <subscribe|unsubscribe|list> <station|zip> [code]",
+		},
+	}
+
+	stream, err := c.Client.StreamEvents(commands)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to stream events")
+		return
+	}
+	defer stream.Close()
+
+	for event := range stream.C {
+		if cmd := event.GetCommand(); cmd != nil {
+			c.handleNoaaCommand(event, cmd)
+		}
+	}
+}
+
+func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent) {
+	log.Info().
+		Str("user_id", cmd.Source.User.Id).
+		Str("user_name", cmd.Source.User.DisplayName).
+		Str("channel_id", cmd.Source.ChannelId).
+		Str("command", cmd.Command).
+		Str("arg", cmd.Arg).
+		Msg("Received !noaa command")
+
+	args := strings.Fields(cmd.Arg)
+	if len(args) < 1 {
+		c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa <subscribe|unsubscribe|list> <station|zip> [code]")
+		return
+	}
+
+	action := strings.ToLower(args[0])
+
+	switch action {
+	case "subscribe":
+		if len(args) < 3 {
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe <station|zip> <code>")
+			return
+		}
+		subType := strings.ToLower(args[1])
+		code := args[2]
+
+		if subType == "station" {
+			c.subscriptions.SubscribeToStation(cmd.Source.User.Id, code)
+			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to station %s", strings.ToUpper(code)))
+		} else if subType == "zip" {
+			c.subscriptions.SubscribeToZip(cmd.Source.User.Id, code)
+			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to zip code %s", code))
+		} else {
+			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station' or 'zip'")
+		}
+
+	case "unsubscribe":
+		if len(args) < 3 {
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa unsubscribe <station|zip> <code>")
+			return
+		}
+		subType := strings.ToLower(args[1])
+		code := args[2]
+
+		if subType == "station" {
+			if c.subscriptions.UnsubscribeFromStation(cmd.Source.User.Id, code) {
+				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Unsubscribed from station %s", strings.ToUpper(code)))
+			} else {
+				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Not subscribed to station %s", strings.ToUpper(code)))
+			}
+		} else if subType == "zip" {
+			if c.subscriptions.UnsubscribeFromZip(cmd.Source.User.Id, code) {
+				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Unsubscribed from zip code %s", code))
+			} else {
+				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Not subscribed to zip code %s", code))
+			}
+		} else {
+			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station' or 'zip'")
+		}
+
+	case "list":
+		stations := c.subscriptions.GetUserStationSubscriptions(cmd.Source.User.Id)
+		zips := c.subscriptions.GetUserZipSubscriptions(cmd.Source.User.Id)
+
+		msg := "Your subscriptions:\n"
+		if len(stations) > 0 {
+			msg += fmt.Sprintf("Stations: %s\n", strings.Join(stations, ", "))
+		}
+		if len(zips) > 0 {
+			msg += fmt.Sprintf("Zip codes: %s\n", strings.Join(zips, ", "))
+		}
+		if len(stations) == 0 && len(zips) == 0 {
+			msg = "You have no active subscriptions"
+		}
+
+		c.SendMessage(cmd.Source.ChannelId, msg)
+
+	default:
+		c.SendMessage(cmd.Source.ChannelId, "Unknown action. Use: subscribe, unsubscribe, or list")
+	}
 }
 
 // Run runs
