@@ -219,17 +219,34 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 			return
 		}
 
+		awipsID, err := messageNWWSIOX.ParseAwipsID()
+		if err != nil {
+			log.Warn().Err(err).Str("awipsid", messageNWWSIOX.AwipsID).Msg("Failed to parse AWIPS ID")
+			return
+		}
+
+		productName := awipsID.GetProductName()
+		productCategory := awipsID.GetProductCategory()
+
 		log.Info().
 			Str("cccc", messageNWWSIOX.Cccc).
 			Str("ttaaii", messageNWWSIOX.Ttaaii).
-			Str("data_type", productID.GetDataType()).
+			Str("wmo_type", productID.GetDataType()).
 			Str("awipsid", messageNWWSIOX.AwipsID).
+			Str("product", productName).
+			Str("category", productCategory).
 			Str("issue", messageNWWSIOX.Issue).
 			Msg("Received weather product")
 
+		// Store both WMO data type and AWIPS product name for flexibility
+		displayName := productName
+		if productCategory != "Unknown" {
+			displayName = fmt.Sprintf("%s (%s)", productName, productCategory)
+		}
+
 		client.subscriptions.AddRecentMessage(RecentMessage{
 			Station:   messageNWWSIOX.Cccc,
-			DataType:  productID.GetDataType(),
+			DataType:  displayName,
 			AwipsID:   messageNWWSIOX.AwipsID,
 			Issue:     messageNWWSIOX.Issue,
 			Text:      messageNWWSIOX.Text,
@@ -240,10 +257,10 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 		if len(subscribers) > 0 {
 			alertMsg := fmt.Sprintf(
 				"[%s] %s\n"+
-					"AWIPS: %s | Issued: %s\n\n"+
+					"Product: %s | Issued: %s\n\n"+
 					"%s",
 				messageNWWSIOX.Cccc,
-				productID.GetDataType(),
+				productName,
 				messageNWWSIOX.AwipsID,
 				messageNWWSIOX.Issue,
 				truncateText(messageNWWSIOX.Text, 1000),

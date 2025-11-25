@@ -202,6 +202,103 @@ func (w *WMOProductID) GetDataType() string {
 	return "Unknown"
 }
 
+// AWIPSProductID represents the parsed AWIPS identifier (NNNxxx)
+type AWIPSProductID struct {
+	NNN string // 3-character product category
+	XXX string // 1-3 character geographic designator
+}
+
+// ProductInfo contains metadata about a weather product
+type ProductInfo struct {
+	Name     string // Full product name
+	Category string // Product category (Forecast, Observation, Warning, etc.)
+}
+
+// CommonProducts maps AWIPS product abbreviations to their metadata
+var CommonProducts = map[string]ProductInfo{
+	// Forecasts
+	"AFD": {Name: "Area Forecast Discussion", Category: "Forecast"},
+	"ZFP": {Name: "Zone Forecast Product", Category: "Forecast"},
+	"NOW": {Name: "Short Term Forecast", Category: "Forecast"},
+	"FWF": {Name: "Fire Weather Forecast", Category: "Fire Weather"},
+	"FWS": {Name: "Fire Weather Outlook", Category: "Fire Weather"},
+	"CFW": {Name: "Coastal Flood Warning", Category: "Warning"},
+
+	// Aviation
+	"TAF": {Name: "Terminal Aerodrome Forecast", Category: "Aviation"},
+	"MET": {Name: "Routine Aviation Weather Report", Category: "Aviation"},
+	"SAO": {Name: "Surface Aviation Observation", Category: "Aviation"},
+	"FT":  {Name: "Winds/Temps Aloft Forecast", Category: "Aviation"},
+
+	// Warnings & Watches
+	"TOR": {Name: "Tornado Warning", Category: "Warning"},
+	"SVR": {Name: "Severe Thunderstorm Warning", Category: "Warning"},
+	"FFW": {Name: "Flash Flood Warning", Category: "Warning"},
+	"FFA": {Name: "Flash Flood Watch", Category: "Watch"},
+	"SVS": {Name: "Severe Weather Statement", Category: "Statement"},
+	"SPS": {Name: "Special Weather Statement", Category: "Statement"},
+	"WSW": {Name: "Winter Storm Warning", Category: "Warning"},
+	"WWA": {Name: "Watch Warning Advisory", Category: "Summary"},
+
+	// Marine
+	"MWS": {Name: "Marine Weather Statement", Category: "Marine"},
+	"OFF": {Name: "Offshore Forecast", Category: "Marine"},
+	"CWF": {Name: "Coastal Waters Forecast", Category: "Marine"},
+
+	// Hydrology
+	"RRM": {Name: "Rainfall Storm Total", Category: "Hydrology"},
+	"RR":  {Name: "Hydrologic Data", Category: "Hydrology"},
+	"FLS": {Name: "Flood Statement", Category: "Hydrology"},
+	"FLW": {Name: "Flood Warning", Category: "Warning"},
+
+	// Climate & Observations
+	"CLI": {Name: "Daily Climate Report", Category: "Climate"},
+	"RTP": {Name: "Regional Temperature/Precipitation", Category: "Climate"},
+	"RER": {Name: "Record Event Report", Category: "Climate"},
+	"LSR": {Name: "Local Storm Report", Category: "Observation"},
+
+	// Public Information
+	"PNS": {Name: "Public Information Statement", Category: "Public Info"},
+	"HWO": {Name: "Hazardous Weather Outlook", Category: "Outlook"},
+	"RWS": {Name: "Regional Weather Summary", Category: "Summary"},
+}
+
+// ParseAwipsID parses the AWIPS identifier into its components
+func (n *NWWSOIMessageXExtension) ParseAwipsID() (*AWIPSProductID, error) {
+	if len(n.AwipsID) < 3 {
+		return nil, fmt.Errorf("invalid AWIPS ID length: expected at least 3, got %d", len(n.AwipsID))
+	}
+
+	// AWIPS ID format is NNNxxx where NNN is always 3 chars
+	// and xxx is 1-3 chars (geographic designator)
+	return &AWIPSProductID{
+		NNN: n.AwipsID[:3],
+		XXX: n.AwipsID[3:],
+	}, nil
+}
+
+// GetProductInfo returns detailed product information if available
+func (a *AWIPSProductID) GetProductInfo() (ProductInfo, bool) {
+	info, found := CommonProducts[a.NNN]
+	return info, found
+}
+
+// GetProductName returns a friendly name for the product
+func (a *AWIPSProductID) GetProductName() string {
+	if info, found := a.GetProductInfo(); found {
+		return info.Name
+	}
+	return a.NNN // Return the abbreviation if not found
+}
+
+// GetProductCategory returns the product category
+func (a *AWIPSProductID) GetProductCategory() string {
+	if info, found := a.GetProductInfo(); found {
+		return info.Category
+	}
+	return "Unknown"
+}
+
 func init() {
 	stanza.TypeRegistry.MapExtension(stanza.PKTMessage, xml.Name{Space: "nwws-oi", Local: "x"}, NWWSOIMessageXExtension{})
 }
