@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -16,7 +18,11 @@ func main() {
 	_ = godotenv.Load()
 
 	if isatty.IsTerminal(os.Stdout.Fd()) {
-		log.Logger = zerolog.New(zerolog.NewConsoleWriter()).With().Timestamp().Logger()
+		consoleWriter := zerolog.NewConsoleWriter()
+		consoleWriter.FormatLevel = func(i interface{}) string {
+			return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
+		}
+		log.Logger = zerolog.New(consoleWriter).With().Timestamp().Logger()
 	} else {
 		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
