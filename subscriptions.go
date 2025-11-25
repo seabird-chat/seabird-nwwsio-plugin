@@ -1,21 +1,45 @@
 package client
 
 import (
+	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
+type RecentMessage struct {
+	Station   string
+	DataType  string
+	AwipsID   string
+	Issue     string
+	Text      string
+	Timestamp time.Time
+}
+
 type SubscriptionManager struct {
-	mu                sync.RWMutex
-	stationSubscribers map[string][]string // station code -> list of user IDs
-	zipSubscribers    map[string][]string // zip code -> list of user IDs
+	mu                 sync.RWMutex
+	stationSubscribers map[string][]string     // station code -> list of user IDs
+	zipSubscribers     map[string][]string     // zip code -> list of user IDs
+	recentMessages     map[string][]RecentMessage // station code -> recent messages (last 5)
 }
 
 func NewSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{
 		stationSubscribers: make(map[string][]string),
-		zipSubscribers:    make(map[string][]string),
+		zipSubscribers:     make(map[string][]string),
+		recentMessages:     make(map[string][]RecentMessage),
 	}
+}
+
+func ValidateStationCode(code string) error {
+	code = strings.ToUpper(code)
+	if len(code) != 4 {
+		return fmt.Errorf("station code must be 4 characters (e.g., KARB)")
+	}
+	if code[0] != 'K' && code[0] != 'P' {
+		return fmt.Errorf("station code must start with K or P")
+	}
+	return nil
 }
 
 func (sm *SubscriptionManager) SubscribeToStation(userID, stationCode string) {
@@ -110,6 +134,68 @@ func (sm *SubscriptionManager) GetUserZipSubscriptions(userID string) []string {
 		}
 	}
 	return zips
+}
+
+func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	count := 0
+
+	for station, subscribers := range sm.stationSubscribers {
+		for i, id := range subscribers {
+			if id == userID {
+				sm.stationSubscribers[station] = append(subscribers[:i], subscribers[i+1:]...)
+				if len(sm.stationSubscribers[station]) == 0 {
+					delete(sm.stationSubscribers, station)
+				}
+				count++
+				break
+			}
+		}
+	}
+
+	for zip, subscribers := range sm.zipSubscribers {
+		for i, id := range subscribers {
+			if id == userID {
+				sm.zipSubscribers[zip] = append(subscribers[:i], subscribers[i+1:]...)
+				if len(sm.zipSubscribers[zip]) == 0 {
+					delete(sm.zipSubscribers, zip)
+				}
+				count++
+				break
+			}
+		}
+	}
+
+	return count
+}
+
+func (sm *SubscriptionManager) AddRecentMessage(msg RecentMessage) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	station := strings.ToUpper(msg.Station)
+	messages := sm.recentMessages[station]
+
+	messages = append(messages, msg)
+	if len(messages) > 5 {
+		messages = messages[1:]
+	}
+
+	sm.recentMessages[station] = messages
+}
+
+func (sm *SubscriptionManager) GetRecentMessages(stationCode string) []RecentMessage {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	stationCode = strings.ToUpper(stationCode)
+	messages := sm.recentMessages[stationCode]
+
+	result := make([]RecentMessage, len(messages))
+	copy(result, messages)
+	return result
 }
 
 func contains(slice []string, item string) bool {
