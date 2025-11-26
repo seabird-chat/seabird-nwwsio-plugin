@@ -219,6 +219,9 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 			return
 		}
 
+		// Normalize AWIPS ID by trimming any whitespace from XML parsing
+		messageNWWSIOX.AwipsID = strings.TrimSpace(messageNWWSIOX.AwipsID)
+
 		// Default to WMO data type as display name
 		productName := productID.GetDataType()
 		productCategory := "Unknown"
