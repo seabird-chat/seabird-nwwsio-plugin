@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -48,6 +49,10 @@ type SeabirdClient struct {
 	nwwsXMPPClient *xmpp.Client
 	mucJID         *stanza.Jid
 	subscriptions  *SubscriptionManager
+
+	// Sequence tracking for detecting missed messages
+	sequenceMu   sync.Mutex
+	lastSequence map[string]int // maps processID -> last sequence number
 }
 
 // NewSeabirdClient returns a new seabird client
@@ -71,6 +76,7 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 		Client:        seabirdClient,
 		mucJID:        mucJID,
 		subscriptions: NewSubscriptionManager(),
+		lastSequence:  make(map[string]int),
 	}
 
 	log.Info().Str("username", nwwsioUsername).Msg("Connecting to NWWS-IO")
@@ -226,6 +232,31 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 
 		// Normalize AWIPS ID by trimming any whitespace from XML parsing
 		messageNWWSIOX.AwipsID = strings.TrimSpace(messageNWWSIOX.AwipsID)
+
+		// Check for missed messages using sequence ID
+		processID, sequenceID, err := messageNWWSIOX.GetSequenceID()
+		if err != nil {
+			log.Debug().Err(err).Str("id", messageNWWSIOX.ID).Msg("Failed to parse sequence ID")
+		} else {
+			client.sequenceMu.Lock()
+			lastSeq, exists := client.lastSequence[processID]
+			if exists {
+				// Check for sequence gaps
+				expected := lastSeq + 1
+				if sequenceID != expected {
+					missedCount := sequenceID - expected
+					log.Warn().
+						Str("process_id", processID).
+						Int("expected_seq", expected).
+						Int("received_seq", sequenceID).
+						Int("missed_count", missedCount).
+						Msg("Detected missed messages - sequence gap")
+				}
+			}
+			// Update the last seen sequence for this process
+			client.lastSequence[processID] = sequenceID
+			client.sequenceMu.Unlock()
+		}
 
 		// Default to WMO data type as display name
 		productName := productID.GetDataType()
