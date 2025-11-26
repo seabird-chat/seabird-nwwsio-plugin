@@ -16,16 +16,22 @@ type RecentMessage struct {
 	Timestamp time.Time
 }
 
+// Subscription represents a user's subscription to a station with filtering
+type Subscription struct {
+	UserID  string
+	Filters []string // Filters: "cap", "all", or category names (Aviation, Hydrology, Marine, etc.)
+}
+
 type SubscriptionManager struct {
 	mu                 sync.RWMutex
-	stationSubscribers map[string][]string     // station code -> list of user IDs
-	zipSubscribers     map[string][]string     // zip code -> list of user IDs
+	stationSubscribers map[string][]Subscription  // station code -> list of subscriptions
+	zipSubscribers     map[string][]string        // zip code -> list of user IDs
 	recentMessages     map[string][]RecentMessage // station code -> recent messages (last 5)
 }
 
 func NewSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{
-		stationSubscribers: make(map[string][]string),
+		stationSubscribers: make(map[string][]Subscription),
 		zipSubscribers:     make(map[string][]string),
 		recentMessages:     make(map[string][]RecentMessage),
 	}
@@ -42,15 +48,37 @@ func ValidateStationCode(code string) error {
 	return nil
 }
 
-func (sm *SubscriptionManager) SubscribeToStation(userID, stationCode string) {
+func (sm *SubscriptionManager) SubscribeToStation(userID, stationCode string, filters []string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	stationCode = strings.ToUpper(stationCode)
 
-	if !contains(sm.stationSubscribers[stationCode], userID) {
-		sm.stationSubscribers[stationCode] = append(sm.stationSubscribers[stationCode], userID)
+	// Default to "cap" if no filters provided
+	if len(filters) == 0 {
+		filters = []string{"cap"}
 	}
+
+	// Normalize filter values to lowercase
+	normalizedFilters := make([]string, len(filters))
+	for i, f := range filters {
+		normalizedFilters[i] = strings.ToLower(f)
+	}
+
+	// Remove existing subscription if present
+	subs := sm.stationSubscribers[stationCode]
+	for i, sub := range subs {
+		if sub.UserID == userID {
+			sm.stationSubscribers[stationCode] = append(subs[:i], subs[i+1:]...)
+			break
+		}
+	}
+
+	// Add new subscription with filters
+	sm.stationSubscribers[stationCode] = append(sm.stationSubscribers[stationCode], Subscription{
+		UserID:  userID,
+		Filters: normalizedFilters,
+	})
 }
 
 func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string) bool {
@@ -60,8 +88,8 @@ func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string
 	stationCode = strings.ToUpper(stationCode)
 
 	subscribers := sm.stationSubscribers[stationCode]
-	for i, id := range subscribers {
-		if id == userID {
+	for i, sub := range subscribers {
+		if sub.UserID == userID {
 			sm.stationSubscribers[stationCode] = append(subscribers[:i], subscribers[i+1:]...)
 			if len(sm.stationSubscribers[stationCode]) == 0 {
 				delete(sm.stationSubscribers, stationCode)
@@ -103,10 +131,25 @@ func (sm *SubscriptionManager) GetStationSubscribers(stationCode string) []strin
 	defer sm.mu.RUnlock()
 
 	stationCode = strings.ToUpper(stationCode)
-	subscribers := sm.stationSubscribers[stationCode]
+	subscriptions := sm.stationSubscribers[stationCode]
 
-	result := make([]string, len(subscribers))
-	copy(result, subscribers)
+	result := make([]string, len(subscriptions))
+	for i, sub := range subscriptions {
+		result[i] = sub.UserID
+	}
+	return result
+}
+
+// GetStationSubscriptions returns all subscriptions (with filters) for a station
+func (sm *SubscriptionManager) GetStationSubscriptions(stationCode string) []Subscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	stationCode = strings.ToUpper(stationCode)
+	subscriptions := sm.stationSubscribers[stationCode]
+
+	result := make([]Subscription, len(subscriptions))
+	copy(result, subscriptions)
 	return result
 }
 
@@ -115,9 +158,12 @@ func (sm *SubscriptionManager) GetUserStationSubscriptions(userID string) []stri
 	defer sm.mu.RUnlock()
 
 	var stations []string
-	for station, subscribers := range sm.stationSubscribers {
-		if contains(subscribers, userID) {
-			stations = append(stations, station)
+	for station, subscriptions := range sm.stationSubscribers {
+		for _, sub := range subscriptions {
+			if sub.UserID == userID {
+				stations = append(stations, station)
+				break
+			}
 		}
 	}
 	return stations
@@ -142,10 +188,10 @@ func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 
 	count := 0
 
-	for station, subscribers := range sm.stationSubscribers {
-		for i, id := range subscribers {
-			if id == userID {
-				sm.stationSubscribers[station] = append(subscribers[:i], subscribers[i+1:]...)
+	for station, subscriptions := range sm.stationSubscribers {
+		for i, sub := range subscriptions {
+			if sub.UserID == userID {
+				sm.stationSubscribers[station] = append(subscriptions[:i], subscriptions[i+1:]...)
 				if len(sm.stationSubscribers[station]) == 0 {
 					delete(sm.stationSubscribers, station)
 				}

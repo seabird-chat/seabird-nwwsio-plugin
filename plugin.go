@@ -373,8 +373,11 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 			Timestamp: time.Now(),
 		})
 
-		subscribers := client.subscriptions.GetStationSubscribers(messageNWWSIOX.Cccc)
-		if len(subscribers) > 0 {
+		subscriptions := client.subscriptions.GetStationSubscriptions(messageNWWSIOX.Cccc)
+		if len(subscriptions) > 0 {
+			// Determine if this is a CAP message
+			isCAP := capAlert != nil
+
 			var alertMsg string
 
 			// Format alert message differently for CAP vs regular products
@@ -427,12 +430,39 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 				)
 			}
 
-			for _, userID := range subscribers {
-				client.SendPrivateMessage(userID, alertMsg)
-				log.Info().
-					Str("user_id", userID).
-					Str("station", messageNWWSIOX.Cccc).
-					Msg("Sent weather alert to subscriber")
+			// Send to subscribers based on their filter preferences
+			for _, sub := range subscriptions {
+				// Check if subscriber should receive this message based on their filters
+				shouldSend := false
+
+				for _, filter := range sub.Filters {
+					filterLower := strings.ToLower(filter)
+
+					if filterLower == "all" {
+						// "all" filter: send all messages
+						shouldSend = true
+						break
+					} else if filterLower == "cap" && isCAP {
+						// "cap" filter: only send CAP messages
+						shouldSend = true
+						break
+					} else if filterLower == strings.ToLower(productCategory) {
+						// Category filter: send if product category matches
+						shouldSend = true
+						break
+					}
+				}
+
+				if shouldSend {
+					client.SendPrivateMessage(sub.UserID, alertMsg)
+					log.Info().
+						Str("user_id", sub.UserID).
+						Str("station", messageNWWSIOX.Cccc).
+						Strs("filters", sub.Filters).
+						Str("product_category", productCategory).
+						Bool("is_cap", isCAP).
+						Msg("Sent weather alert to subscriber")
+				}
 			}
 		}
 	}
@@ -605,11 +635,33 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 
 	case "subscribe":
 		if len(args) < 3 {
-			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe <station|zip> <code>")
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe <station|zip> <code> [filters...]")
+			c.SendMessage(cmd.Source.ChannelId, "Filters: cap (default), all, Aviation, Hydrology, Marine, Fire Weather, etc.")
 			return
 		}
 		subType := strings.ToLower(args[1])
 		code := args[2]
+
+		// Parse filter parameters (default to CAP only)
+		// Filters can be: "cap", "all", or category names like "Aviation", "Hydrology", "Marine", etc.
+		var filters []string
+		if len(args) >= 4 {
+			// Collect all remaining args as filters, split by comma if needed
+			for _, arg := range args[3:] {
+				// Support comma-separated filters (e.g., "cap,aviation" or "cap, aviation")
+				parts := strings.Split(arg, ",")
+				for _, part := range parts {
+					trimmed := strings.TrimSpace(part)
+					if trimmed != "" {
+						filters = append(filters, trimmed)
+					}
+				}
+			}
+		}
+		// If no filters specified, default to ["cap"]
+		if len(filters) == 0 {
+			filters = []string{"cap"}
+		}
 
 		if subType == "station" {
 			if err := ValidateStationCode(code); err != nil {
@@ -617,11 +669,38 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 				return
 			}
 
-			c.subscriptions.SubscribeToStation(cmd.Source.User.Id, code)
-			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to station %s", strings.ToUpper(code)))
+			c.subscriptions.SubscribeToStation(cmd.Source.User.Id, code, filters)
+			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to station %s with filters: %s", strings.ToUpper(code), strings.Join(filters, ", ")))
 
 			recent := c.subscriptions.GetRecentMessages(code)
-			confirmMsg := fmt.Sprintf("You'll receive DMs for all weather products from %s.", strings.ToUpper(code))
+			var confirmMsg string
+
+			// Build confirmation message based on filters
+			hasAll := false
+			hasCAP := false
+			categories := []string{}
+			for _, f := range filters {
+				fLower := strings.ToLower(f)
+				if fLower == "all" {
+					hasAll = true
+				} else if fLower == "cap" {
+					hasCAP = true
+				} else {
+					categories = append(categories, f)
+				}
+			}
+
+			if hasAll {
+				confirmMsg = fmt.Sprintf("You'll receive DMs for ALL weather products from %s.", strings.ToUpper(code))
+			} else if hasCAP && len(categories) == 0 {
+				confirmMsg = fmt.Sprintf("You'll receive DMs for emergency alerts (CAP) from %s.", strings.ToUpper(code))
+			} else if len(categories) > 0 && !hasCAP {
+				confirmMsg = fmt.Sprintf("You'll receive DMs for %s products from %s.", strings.Join(categories, ", "), strings.ToUpper(code))
+			} else {
+				// CAP + categories
+				confirmMsg = fmt.Sprintf("You'll receive DMs for CAP alerts and %s products from %s.", strings.Join(categories, ", "), strings.ToUpper(code))
+			}
+
 			if len(recent) > 0 {
 				lastMsg := recent[len(recent)-1]
 				confirmMsg += fmt.Sprintf("\nLast activity: %s (%s ago)",
