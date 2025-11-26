@@ -223,257 +223,281 @@ func joinMUC(c xmpp.Sender, toJID *stanza.Jid) error {
 	})
 }
 
+// checkSequenceGaps detects and logs any missed messages based on sequence IDs
+func checkSequenceGaps(client *SeabirdClient, processID string, sequenceID int) {
+	client.sequenceMu.Lock()
+	defer client.sequenceMu.Unlock()
+
+	lastSeq, exists := client.lastSequence[processID]
+	if exists {
+		expected := lastSeq + 1
+		if sequenceID != expected {
+			missedCount := sequenceID - expected
+			log.Warn().
+				Str("process_id", processID).
+				Int("expected_seq", expected).
+				Int("received_seq", sequenceID).
+				Int("missed_count", missedCount).
+				Msg("Detected missed messages - sequence gap")
+		}
+	}
+	client.lastSequence[processID] = sequenceID
+}
+
+// productInfo holds parsed product identification information
+type productInfo struct {
+	productID       *nwwsio.WMOProductID
+	productName     string
+	productCategory string
+	capAlert        *nwwsio.Alert
+}
+
+// parseProductInfo extracts product identification from the NWWS message
+func parseProductInfo(messageNWWSIOX *nwwsio.NWWSOIMessageXExtension) (*productInfo, error) {
+	productID, err := messageNWWSIOX.ParseTtaaii()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse WMO product ID: %w", err)
+	}
+
+	// Default to WMO data type
+	info := &productInfo{
+		productID:       productID,
+		productName:     productID.GetDataType(),
+		productCategory: "Unknown",
+	}
+
+	// Try to get more specific product info from AWIPS ID
+	awipsID, err := messageNWWSIOX.ParseAwipsID()
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Str("awipsid", messageNWWSIOX.AwipsID).
+			Str("cccc", messageNWWSIOX.Cccc).
+			Str("ttaaii", messageNWWSIOX.Ttaaii).
+			Msg("Failed to parse AWIPS ID, using WMO type as fallback")
+	} else {
+		info.productName = awipsID.GetProductName()
+		info.productCategory = awipsID.GetProductCategory()
+	}
+
+	// Try to parse CAP message if it looks like one
+	if isLikelyCAP(productID, messageNWWSIOX.Text) {
+		capAlert, err := nwwsio.ParseCAP(messageNWWSIOX.Text)
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to parse CAP message")
+		} else {
+			info.capAlert = capAlert
+		}
+	}
+
+	return info, nil
+}
+
+// logProductReceipt logs the received weather product with appropriate detail
+func logProductReceipt(messageNWWSIOX *nwwsio.NWWSOIMessageXExtension, info *productInfo) {
+	baseLog := log.Info().
+		Str("cccc", messageNWWSIOX.Cccc).
+		Str("ttaaii", messageNWWSIOX.Ttaaii).
+		Str("wmo_type", info.productID.GetDataType()).
+		Str("awipsid", messageNWWSIOX.AwipsID).
+		Str("product", info.productName).
+		Str("category", info.productCategory).
+		Str("issue", messageNWWSIOX.Issue)
+
+	if info.capAlert != nil {
+		capInfo := info.capAlert.GetPrimaryInfo()
+		if capInfo != nil {
+			baseLog.
+				Str("cap_event", capInfo.Event).
+				Str("cap_severity", capInfo.Severity).
+				Str("cap_urgency", capInfo.Urgency).
+				Str("cap_certainty", capInfo.Certainty)
+
+			if len(capInfo.Area) > 0 {
+				baseLog.Str("cap_areas", capInfo.Area[0].AreaDesc)
+			}
+			if capInfo.Headline != "" {
+				baseLog.Str("cap_headline", capInfo.Headline)
+			}
+			baseLog.Msg("Received CAP alert")
+		} else {
+			baseLog.Msg("Received CAP alert (no info block)")
+		}
+	} else {
+		baseLog.Msg("Received weather product")
+	}
+}
+
+// buildDisplayName creates a human-readable display name for the product
+func buildDisplayName(info *productInfo) string {
+	displayName := info.productName
+	if info.productCategory != "Unknown" {
+		displayName = fmt.Sprintf("%s (%s)", info.productName, info.productCategory)
+	}
+
+	// Enhance with CAP alert details if available
+	if info.capAlert != nil {
+		capInfo := info.capAlert.GetPrimaryInfo()
+		if capInfo != nil && capInfo.Event != "" {
+			displayName = fmt.Sprintf("%s [%s/%s]", capInfo.Event, capInfo.Severity, capInfo.Urgency)
+		}
+	}
+
+	return displayName
+}
+
+// formatAlertMessage formats the alert message for delivery to subscribers
+func formatAlertMessage(messageNWWSIOX *nwwsio.NWWSOIMessageXExtension, info *productInfo) string {
+	if info.capAlert != nil && info.capAlert.GetPrimaryInfo() != nil {
+		return formatCAPAlert(messageNWWSIOX, info.capAlert)
+	}
+	return formatRegularProduct(messageNWWSIOX, info.productName)
+}
+
+// formatCAPAlert formats a CAP alert message with full details
+func formatCAPAlert(messageNWWSIOX *nwwsio.NWWSOIMessageXExtension, capAlert *nwwsio.Alert) string {
+	capInfo := capAlert.GetPrimaryInfo()
+
+	msg := fmt.Sprintf(
+		"[%s] %s\n"+
+			"Severity: %s | Urgency: %s | Certainty: %s\n"+
+			"Product: %s | Issued: %s\n",
+		messageNWWSIOX.Cccc,
+		capInfo.Event,
+		capInfo.Severity,
+		capInfo.Urgency,
+		capInfo.Certainty,
+		messageNWWSIOX.AwipsID,
+		messageNWWSIOX.Issue,
+	)
+
+	if capInfo.Headline != "" {
+		msg += fmt.Sprintf("\n%s\n", capInfo.Headline)
+	}
+
+	if len(capInfo.Area) > 0 && capInfo.Area[0].AreaDesc != "" {
+		msg += fmt.Sprintf("\nAffected Areas: %s\n", capInfo.Area[0].AreaDesc)
+	}
+
+	if capInfo.Description != "" {
+		msg += fmt.Sprintf("\n%s", truncateText(capInfo.Description, MaxCAPDescriptionLen))
+	} else {
+		msg += fmt.Sprintf("\n%s", truncateText(messageNWWSIOX.Text, MaxCAPDescriptionLen))
+	}
+
+	if capInfo.Instruction != "" {
+		msg += fmt.Sprintf("\n\nInstructions: %s", truncateText(capInfo.Instruction, MaxCAPInstructionLen))
+	}
+
+	return msg
+}
+
+// formatRegularProduct formats a non-CAP weather product message
+func formatRegularProduct(messageNWWSIOX *nwwsio.NWWSOIMessageXExtension, productName string) string {
+	return fmt.Sprintf(
+		"[%s] %s\n"+
+			"Product: %s | Issued: %s\n\n"+
+			"%s",
+		messageNWWSIOX.Cccc,
+		productName,
+		messageNWWSIOX.AwipsID,
+		messageNWWSIOX.Issue,
+		truncateText(messageNWWSIOX.Text, MaxRegularProductLen),
+	)
+}
+
+// shouldSendToSubscriber determines if a subscriber should receive this message based on their filters
+func shouldSendToSubscriber(sub Subscription, productCategory string, isCAP bool) bool {
+	for _, filter := range sub.Filters {
+		filterLower := strings.ToLower(filter)
+
+		if filterLower == "all" {
+			return true
+		}
+		if filterLower == "cap" && isCAP {
+			return true
+		}
+		if filterLower == strings.ToLower(productCategory) {
+			return true
+		}
+	}
+	return false
+}
+
+// deliverToSubscribers sends the alert message to all matching subscribers
+func deliverToSubscribers(client *SeabirdClient, messageNWWSIOX *nwwsio.NWWSOIMessageXExtension, info *productInfo, alertMsg string) {
+	subscriptions := client.subscriptions.GetStationSubscriptions(messageNWWSIOX.Cccc)
+	if len(subscriptions) == 0 {
+		return
+	}
+
+	isCAP := info.capAlert != nil
+
+	for _, sub := range subscriptions {
+		if shouldSendToSubscriber(sub, info.productCategory, isCAP) {
+			client.SendPrivateMessage(sub.UserID, alertMsg)
+			log.Info().
+				Str("user_id", sub.UserID).
+				Str("station", messageNWWSIOX.Cccc).
+				Strs("filters", sub.Filters).
+				Str("product_category", info.productCategory).
+				Bool("is_cap", isCAP).
+				Msg("Sent weather alert to subscriber")
+		}
+	}
+}
+
 func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
+	// Only process Message packets
 	msg, ok := p.(stanza.Message)
 	if !ok {
 		log.Debug().Str("type", fmt.Sprintf("%T", p)).Msg("Ignoring packet")
 		return
 	}
 
+	// Extract NWWS-OI extension from message
 	var messageNWWSIOX nwwsio.NWWSOIMessageXExtension
-	if ok := msg.Get(&messageNWWSIOX); ok {
-		productID, err := messageNWWSIOX.ParseTtaaii()
-		if err != nil {
-			log.Warn().Err(err).Str("ttaaii", messageNWWSIOX.Ttaaii).Msg("Failed to parse WMO product ID")
-			return
-		}
-
-		// Normalize AWIPS ID by trimming any whitespace from XML parsing
-		messageNWWSIOX.AwipsID = strings.TrimSpace(messageNWWSIOX.AwipsID)
-
-		// Check for missed messages using sequence ID
-		processID, sequenceID, err := messageNWWSIOX.GetSequenceID()
-		if err != nil {
-			log.Debug().Err(err).Str("id", messageNWWSIOX.ID).Msg("Failed to parse sequence ID")
-		} else {
-			client.sequenceMu.Lock()
-			lastSeq, exists := client.lastSequence[processID]
-			if exists {
-				// Check for sequence gaps
-				expected := lastSeq + 1
-				if sequenceID != expected {
-					missedCount := sequenceID - expected
-					log.Warn().
-						Str("process_id", processID).
-						Int("expected_seq", expected).
-						Int("received_seq", sequenceID).
-						Int("missed_count", missedCount).
-						Msg("Detected missed messages - sequence gap")
-				}
-			}
-			// Update the last seen sequence for this process
-			client.lastSequence[processID] = sequenceID
-			client.sequenceMu.Unlock()
-		}
-
-		// Default to WMO data type as display name
-		productName := productID.GetDataType()
-		productCategory := "Unknown"
-
-		// Try to parse AWIPS ID for more specific product info
-		// Some messages may have empty AWIPS IDs, so handle gracefully
-		awipsID, err := messageNWWSIOX.ParseAwipsID()
-		if err != nil {
-			log.Debug().
-				Err(err).
-				Str("awipsid", messageNWWSIOX.AwipsID).
-				Str("cccc", messageNWWSIOX.Cccc).
-				Str("ttaaii", messageNWWSIOX.Ttaaii).
-				Msg("Failed to parse AWIPS ID, using WMO type as fallback")
-		} else {
-			// Successfully parsed AWIPS ID, use it for better names
-			productName = awipsID.GetProductName()
-			productCategory = awipsID.GetProductCategory()
-		}
-
-		// Try to parse CAP (Common Alerting Protocol) message
-		var capAlert *nwwsio.Alert
-		if isLikelyCAP(productID, messageNWWSIOX.Text) {
-			var err error
-			capAlert, err = nwwsio.ParseCAP(messageNWWSIOX.Text)
-			if err != nil {
-				log.Debug().Err(err).Msg("Failed to parse CAP message")
-			} else if capAlert != nil {
-				// Successfully parsed CAP message
-				info := capAlert.GetPrimaryInfo()
-				if info != nil {
-					// Log CAP-specific fields
-					logEvent := log.Info().
-						Str("cccc", messageNWWSIOX.Cccc).
-						Str("ttaaii", messageNWWSIOX.Ttaaii).
-						Str("wmo_type", productID.GetDataType()).
-						Str("awipsid", messageNWWSIOX.AwipsID).
-						Str("product", productName).
-						Str("category", productCategory).
-						Str("issue", messageNWWSIOX.Issue).
-						Str("cap_event", info.Event).
-						Str("cap_severity", info.Severity).
-						Str("cap_urgency", info.Urgency).
-						Str("cap_certainty", info.Certainty)
-
-					// Add areas if present
-					if len(info.Area) > 0 {
-						logEvent.Str("cap_areas", info.Area[0].AreaDesc)
-					}
-
-					// Add headline if present
-					if info.Headline != "" {
-						logEvent.Str("cap_headline", info.Headline)
-					}
-
-					logEvent.Msg("Received CAP alert")
-				} else {
-					log.Info().
-						Str("cccc", messageNWWSIOX.Cccc).
-						Str("ttaaii", messageNWWSIOX.Ttaaii).
-						Str("wmo_type", productID.GetDataType()).
-						Str("awipsid", messageNWWSIOX.AwipsID).
-						Str("product", productName).
-						Str("category", productCategory).
-						Str("issue", messageNWWSIOX.Issue).
-						Msg("Received CAP alert (no info block)")
-				}
-			} else {
-				// Not a CAP message, log normally
-				log.Info().
-					Str("cccc", messageNWWSIOX.Cccc).
-					Str("ttaaii", messageNWWSIOX.Ttaaii).
-					Str("wmo_type", productID.GetDataType()).
-					Str("awipsid", messageNWWSIOX.AwipsID).
-					Str("product", productName).
-					Str("category", productCategory).
-					Str("issue", messageNWWSIOX.Issue).
-					Msg("Received weather product")
-			}
-		} else {
-			// Non-CAP message, log normally
-			log.Info().
-				Str("cccc", messageNWWSIOX.Cccc).
-				Str("ttaaii", messageNWWSIOX.Ttaaii).
-				Str("wmo_type", productID.GetDataType()).
-				Str("awipsid", messageNWWSIOX.AwipsID).
-				Str("product", productName).
-				Str("category", productCategory).
-				Str("issue", messageNWWSIOX.Issue).
-				Msg("Received weather product")
-		}
-
-		// Store both WMO data type and AWIPS product name for flexibility
-		displayName := productName
-		if productCategory != "Unknown" {
-			displayName = fmt.Sprintf("%s (%s)", productName, productCategory)
-		}
-
-		// If this is a CAP message with parsed data, enhance the display name
-		if capAlert != nil {
-			info := capAlert.GetPrimaryInfo()
-			if info != nil && info.Event != "" {
-				displayName = fmt.Sprintf("%s [%s/%s]", info.Event, info.Severity, info.Urgency)
-			}
-		}
-
-		client.subscriptions.AddRecentMessage(RecentMessage{
-			Station:   messageNWWSIOX.Cccc,
-			DataType:  displayName,
-			AwipsID:   messageNWWSIOX.AwipsID,
-			Issue:     messageNWWSIOX.Issue,
-			Text:      messageNWWSIOX.Text,
-			Timestamp: time.Now(),
-		})
-
-		subscriptions := client.subscriptions.GetStationSubscriptions(messageNWWSIOX.Cccc)
-		if len(subscriptions) > 0 {
-			// Determine if this is a CAP message
-			isCAP := capAlert != nil
-
-			var alertMsg string
-
-			// Format alert message differently for CAP vs regular products
-			if capAlert != nil && capAlert.GetPrimaryInfo() != nil {
-				info := capAlert.GetPrimaryInfo()
-				alertMsg = fmt.Sprintf(
-					"[%s] %s\n"+
-						"Severity: %s | Urgency: %s | Certainty: %s\n"+
-						"Product: %s | Issued: %s\n",
-					messageNWWSIOX.Cccc,
-					info.Event,
-					info.Severity,
-					info.Urgency,
-					info.Certainty,
-					messageNWWSIOX.AwipsID,
-					messageNWWSIOX.Issue,
-				)
-
-				// Add headline if present
-				if info.Headline != "" {
-					alertMsg += fmt.Sprintf("\n%s\n", info.Headline)
-				}
-
-				// Add areas if present
-				if len(info.Area) > 0 && info.Area[0].AreaDesc != "" {
-					alertMsg += fmt.Sprintf("\nAffected Areas: %s\n", info.Area[0].AreaDesc)
-				}
-
-				// Add description or instruction
-				if info.Description != "" {
-					alertMsg += fmt.Sprintf("\n%s", truncateText(info.Description, MaxCAPDescriptionLen))
-				} else {
-					alertMsg += fmt.Sprintf("\n%s", truncateText(messageNWWSIOX.Text, MaxCAPDescriptionLen))
-				}
-
-				if info.Instruction != "" {
-					alertMsg += fmt.Sprintf("\n\nInstructions: %s", truncateText(info.Instruction, MaxCAPInstructionLen))
-				}
-			} else {
-				// Regular product format
-				alertMsg = fmt.Sprintf(
-					"[%s] %s\n"+
-						"Product: %s | Issued: %s\n\n"+
-						"%s",
-					messageNWWSIOX.Cccc,
-					productName,
-					messageNWWSIOX.AwipsID,
-					messageNWWSIOX.Issue,
-					truncateText(messageNWWSIOX.Text, MaxRegularProductLen),
-				)
-			}
-
-			// Send to subscribers based on their filter preferences
-			for _, sub := range subscriptions {
-				// Check if subscriber should receive this message based on their filters
-				shouldSend := false
-
-				for _, filter := range sub.Filters {
-					filterLower := strings.ToLower(filter)
-
-					if filterLower == "all" {
-						// "all" filter: send all messages
-						shouldSend = true
-						break
-					} else if filterLower == "cap" && isCAP {
-						// "cap" filter: only send CAP messages
-						shouldSend = true
-						break
-					} else if filterLower == strings.ToLower(productCategory) {
-						// Category filter: send if product category matches
-						shouldSend = true
-						break
-					}
-				}
-
-				if shouldSend {
-					client.SendPrivateMessage(sub.UserID, alertMsg)
-					log.Info().
-						Str("user_id", sub.UserID).
-						Str("station", messageNWWSIOX.Cccc).
-						Strs("filters", sub.Filters).
-						Str("product_category", productCategory).
-						Bool("is_cap", isCAP).
-						Msg("Sent weather alert to subscriber")
-				}
-			}
-		}
+	if ok := msg.Get(&messageNWWSIOX); !ok {
+		return
 	}
+
+	// Normalize AWIPS ID by trimming any whitespace from XML parsing
+	messageNWWSIOX.AwipsID = strings.TrimSpace(messageNWWSIOX.AwipsID)
+
+	// Check for sequence gaps in the message stream
+	processID, sequenceID, err := messageNWWSIOX.GetSequenceID()
+	if err != nil {
+		log.Debug().Err(err).Str("id", messageNWWSIOX.ID).Msg("Failed to parse sequence ID")
+	} else {
+		checkSequenceGaps(client, processID, sequenceID)
+	}
+
+	// Parse product identification information
+	info, err := parseProductInfo(&messageNWWSIOX)
+	if err != nil {
+		log.Warn().Err(err).Str("ttaaii", messageNWWSIOX.Ttaaii).Msg("Failed to parse product info")
+		return
+	}
+
+	// Log receipt of this weather product
+	logProductReceipt(&messageNWWSIOX, info)
+
+	// Build a user-friendly display name for the product
+	displayName := buildDisplayName(info)
+
+	// Store this message in recent history for the station
+	client.subscriptions.AddRecentMessage(RecentMessage{
+		Station:   messageNWWSIOX.Cccc,
+		DataType:  displayName,
+		AwipsID:   messageNWWSIOX.AwipsID,
+		Issue:     messageNWWSIOX.Issue,
+		Text:      messageNWWSIOX.Text,
+		Timestamp: time.Now(),
+	})
+
+	// Deliver to any subscribers for this station
+	alertMsg := formatAlertMessage(&messageNWWSIOX, info)
+	deliverToSubscribers(client, &messageNWWSIOX, info, alertMsg)
 }
 
 func truncateText(text string, maxLen int) string {
