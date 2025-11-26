@@ -84,7 +84,7 @@ func (n *NWWSOIMessageXExtension) GetSequenceID() (processName string, sequenceI
 	return processName, sequenceID, nil
 }
 
-// See https://community.wmo.int/en/table-1 and https://community.wmo.int/en/table-b1
+// See https://wmo.int/table-1 and https://wmo.int/table-b1
 /*
 | T1 | Data Type                                       | T2  | A1      | A2      | ii   | Priority  |
 |----|--------------------------------------------------|-----|---------|---------|------|-----------|
@@ -141,7 +141,7 @@ var PriorityDescriptions = map[PriorityLevel]string{
 	Priority4: "Administrative messages",
 }
 
-// https://community.wmo.int/en/table-1
+// https://wmo.int/table-1
 var DataTable = []DataEntry{
 	{"A", "Analyses", "B1", "C1", "C1", "**", []PriorityLevel{Priority3}},
 	{"B", "Addressed message", "***", "***", "***", "***", []PriorityLevel{Priority1, Priority2, Priority4}},
