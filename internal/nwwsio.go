@@ -222,13 +222,16 @@ var CommonProducts = map[string]ProductInfo{
 	"NOW": {Name: "Short Term Forecast", Category: "Forecast"},
 	"FWF": {Name: "Fire Weather Forecast", Category: "Fire Weather"},
 	"FWS": {Name: "Fire Weather Outlook", Category: "Fire Weather"},
-	"CFW": {Name: "Coastal Flood Warning", Category: "Warning"},
+	"PFM": {Name: "Point Forecast Matrices", Category: "Forecast"},
+	"SFT": {Name: "Tabular State Forecast", Category: "Forecast"},
 
 	// Aviation
 	"TAF": {Name: "Terminal Aerodrome Forecast", Category: "Aviation"},
 	"MET": {Name: "Routine Aviation Weather Report", Category: "Aviation"},
 	"SAO": {Name: "Surface Aviation Observation", Category: "Aviation"},
 	"FT":  {Name: "Winds/Temps Aloft Forecast", Category: "Aviation"},
+	"AVG": {Name: "Aviation Gridded Forecast", Category: "Aviation"},
+	"VFT": {Name: "Terminal Forecast Tables", Category: "Aviation"},
 
 	// Warnings & Watches
 	"TOR": {Name: "Tornado Warning", Category: "Warning"},
@@ -239,41 +242,65 @@ var CommonProducts = map[string]ProductInfo{
 	"SPS": {Name: "Special Weather Statement", Category: "Statement"},
 	"WSW": {Name: "Winter Storm Warning", Category: "Warning"},
 	"WWA": {Name: "Watch Warning Advisory", Category: "Summary"},
+	"CFW": {Name: "Coastal Flood Warning", Category: "Warning"},
+	"FLW": {Name: "Flood Warning", Category: "Warning"},
+	"WAR": {Name: "Space Weather Warning", Category: "Warning"},
 
 	// Marine
 	"MWS": {Name: "Marine Weather Statement", Category: "Marine"},
+	"MWW": {Name: "Marine Weather Warning", Category: "Marine"},
 	"OFF": {Name: "Offshore Forecast", Category: "Marine"},
 	"CWF": {Name: "Coastal Waters Forecast", Category: "Marine"},
 
 	// Hydrology
 	"RRM": {Name: "Rainfall Storm Total", Category: "Hydrology"},
 	"RR":  {Name: "Hydrologic Data", Category: "Hydrology"},
+	"RR1": {Name: "Hydrologic Data (1-hour)", Category: "Hydrology"},
+	"RR2": {Name: "Hydrologic Data (2-hour)", Category: "Hydrology"},
+	"RR3": {Name: "Hydrologic Data (3-hour)", Category: "Hydrology"},
+	"RR4": {Name: "Hydrologic Data (4-hour)", Category: "Hydrology"},
+	"RR5": {Name: "Hydrologic Data (5-hour)", Category: "Hydrology"},
+	"RR6": {Name: "Hydrologic Data (6-hour)", Category: "Hydrology"},
+	"RR7": {Name: "Hydrologic Data (7-hour)", Category: "Hydrology"},
+	"RR8": {Name: "Hydrologic Data (8-hour)", Category: "Hydrology"},
+	"RR9": {Name: "Hydrologic Data (9-hour)", Category: "Hydrology"},
 	"FLS": {Name: "Flood Statement", Category: "Hydrology"},
-	"FLW": {Name: "Flood Warning", Category: "Warning"},
+	"HML": {Name: "Hydrologic Monitoring Statement", Category: "Hydrology"},
 
 	// Climate & Observations
 	"CLI": {Name: "Daily Climate Report", Category: "Climate"},
 	"RTP": {Name: "Regional Temperature/Precipitation", Category: "Climate"},
 	"RER": {Name: "Record Event Report", Category: "Climate"},
 	"LSR": {Name: "Local Storm Report", Category: "Observation"},
+	"RWR": {Name: "Regional Weather Roundup", Category: "Summary"},
 
 	// Public Information
 	"PNS": {Name: "Public Information Statement", Category: "Public Info"},
 	"HWO": {Name: "Hazardous Weather Outlook", Category: "Outlook"},
 	"RWS": {Name: "Regional Weather Summary", Category: "Summary"},
+
+	// Administrative & Technical
+	"CAP": {Name: "Common Alerting Protocol", Category: "Administrative"},
+	"AFM": {Name: "Area Forecast Matrices", Category: "Forecast"},
+	"FHM": {Name: "Forecast Hydrometeorological", Category: "Forecast"},
+	"NSH": {Name: "Nearshore Marine Forecast", Category: "Marine"},
+	"FWM": {Name: "Fire Weather Matrix", Category: "Fire Weather"},
 }
 
 // ParseAwipsID parses the AWIPS identifier into its components
 func (n *NWWSOIMessageXExtension) ParseAwipsID() (*AWIPSProductID, error) {
-	if len(n.AwipsID) < 3 {
-		return nil, fmt.Errorf("invalid AWIPS ID length: expected at least 3, got %d", len(n.AwipsID))
+	// Trim whitespace that may come from XML parsing
+	awipsID := strings.TrimSpace(n.AwipsID)
+
+	if len(awipsID) < 3 {
+		return nil, fmt.Errorf("invalid AWIPS ID length: expected at least 3, got %d", len(awipsID))
 	}
 
 	// AWIPS ID format is NNNxxx where NNN is always 3 chars
 	// and xxx is 1-3 chars (geographic designator)
 	return &AWIPSProductID{
-		NNN: n.AwipsID[:3],
-		XXX: n.AwipsID[3:],
+		NNN: awipsID[:3],
+		XXX: awipsID[3:],
 	}, nil
 }
 

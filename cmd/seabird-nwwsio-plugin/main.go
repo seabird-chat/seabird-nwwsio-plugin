@@ -27,7 +27,18 @@ func main() {
 		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	// Set log level from environment variable, default to Info
+	logLevel := os.Getenv("LOG_LEVEL")
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	case "warn":
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	case "error":
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	default:
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
 
 	coreURL := os.Getenv("SEABIRD_HOST")
 	coreToken := os.Getenv("SEABIRD_TOKEN")

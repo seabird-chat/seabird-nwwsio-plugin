@@ -219,14 +219,25 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 			return
 		}
 
+		// Default to WMO data type as display name
+		productName := productID.GetDataType()
+		productCategory := "Unknown"
+
+		// Try to parse AWIPS ID for more specific product info
+		// Some messages may have empty AWIPS IDs, so handle gracefully
 		awipsID, err := messageNWWSIOX.ParseAwipsID()
 		if err != nil {
-			log.Warn().Err(err).Str("awipsid", messageNWWSIOX.AwipsID).Msg("Failed to parse AWIPS ID")
-			return
+			log.Debug().
+				Err(err).
+				Str("awipsid", messageNWWSIOX.AwipsID).
+				Str("cccc", messageNWWSIOX.Cccc).
+				Str("ttaaii", messageNWWSIOX.Ttaaii).
+				Msg("Failed to parse AWIPS ID, using WMO type as fallback")
+		} else {
+			// Successfully parsed AWIPS ID, use it for better names
+			productName = awipsID.GetProductName()
+			productCategory = awipsID.GetProductCategory()
 		}
-
-		productName := awipsID.GetProductName()
-		productCategory := awipsID.GetProductCategory()
 
 		log.Info().
 			Str("cccc", messageNWWSIOX.Cccc).
