@@ -28,6 +28,14 @@ const (
 	NWWSServerPort  string = "5222"
 	NWWSDomain      string = "nwws-oi.weather.gov"
 	NWWSResource    string = "nwws"
+
+	// Message limits
+	MaxRecentMessages       = 5
+	MaxCAPDescriptionLen    = 800
+	MaxCAPInstructionLen    = 200
+	MaxRegularProductLen    = 1000
+	MUCReconnectDelay       = 5 * time.Second
+	ConnectionTimeout       = 3 * time.Second
 )
 
 var Version = "v0.0.0-dev"
@@ -125,7 +133,7 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword, instanceID string) (
 		Jid:            fmt.Sprintf("%s@%s/%s-%s", nwwsioUsername, NWWSDomain, NWWSResource, instanceID),
 		Credential:     xmpp.Password(nwwsioPassword),
 		Insecure:       false,
-		ConnectTimeout: 3,
+		ConnectTimeout: int(ConnectionTimeout.Seconds()),
 	}
 
 	collegeParkConfig := xmpp.TransportConfiguration{
@@ -280,7 +288,7 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 
 		// Try to parse CAP (Common Alerting Protocol) message
 		var capAlert *nwwsio.Alert
-		if productID.T1 == "X" || strings.Contains(messageNWWSIOX.Text, "<alert") {
+		if isLikelyCAP(productID, messageNWWSIOX.Text) {
 			var err error
 			capAlert, err = nwwsio.ParseCAP(messageNWWSIOX.Text)
 			if err != nil {
@@ -408,13 +416,13 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 
 				// Add description or instruction
 				if info.Description != "" {
-					alertMsg += fmt.Sprintf("\n%s", truncateText(info.Description, 800))
+					alertMsg += fmt.Sprintf("\n%s", truncateText(info.Description, MaxCAPDescriptionLen))
 				} else {
-					alertMsg += fmt.Sprintf("\n%s", truncateText(messageNWWSIOX.Text, 800))
+					alertMsg += fmt.Sprintf("\n%s", truncateText(messageNWWSIOX.Text, MaxCAPDescriptionLen))
 				}
 
 				if info.Instruction != "" {
-					alertMsg += fmt.Sprintf("\n\nInstructions: %s", truncateText(info.Instruction, 200))
+					alertMsg += fmt.Sprintf("\n\nInstructions: %s", truncateText(info.Instruction, MaxCAPInstructionLen))
 				}
 			} else {
 				// Regular product format
@@ -426,7 +434,7 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 					productName,
 					messageNWWSIOX.AwipsID,
 					messageNWWSIOX.Issue,
-					truncateText(messageNWWSIOX.Text, 1000),
+					truncateText(messageNWWSIOX.Text, MaxRegularProductLen),
 				)
 			}
 
@@ -475,6 +483,10 @@ func truncateText(text string, maxLen int) string {
 	return text[:maxLen] + "...\n[Message truncated]"
 }
 
+func isLikelyCAP(productID *nwwsio.WMOProductID, text string) bool {
+	return productID.T1 == "X" || strings.Contains(text, "<alert")
+}
+
 func errorHandler(err error) {
 	log.Error().Err(err).Msg("XMPP error")
 }
@@ -519,7 +531,7 @@ func handlePresence(s xmpp.Sender, p stanza.Packet, mucJID *stanza.Jid) {
 
 		// Attempt to rejoin the MUC after a short delay
 		go func() {
-			time.Sleep(5 * time.Second)
+			time.Sleep(MUCReconnectDelay)
 			log.Info().Str("muc_jid", mucJID.Full()).Msg("Attempting to rejoin MUC after error")
 			if err := joinMUC(s, mucJID); err != nil {
 				log.Error().Err(err).Msg("Failed to rejoin MUC")
@@ -662,7 +674,7 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 
 	case "subscribe":
 		if len(args) < 3 {
-			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe <station|zip> <code> [filters...]")
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe station <code> [filters...]")
 			c.SendMessage(cmd.Source.ChannelId, "Filters: cap (default), all, Aviation, Hydrology, Marine, Fire Weather, etc.")
 			return
 		}
@@ -702,16 +714,13 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 			}
 			c.SendPrivateMessage(cmd.Source.User.Id, confirmMsg)
 
-		} else if subType == "zip" {
-			c.subscriptions.SubscribeToZip(cmd.Source.User.Id, code)
-			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to zip code %s", code))
 		} else {
-			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station' or 'zip'")
+			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station'")
 		}
 
 	case "unsubscribe":
 		if len(args) < 2 {
-			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa unsubscribe <station|zip|all> [code]")
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa unsubscribe <station|all> [code]")
 			return
 		}
 		subType := strings.ToLower(args[1])
@@ -727,7 +736,7 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 		}
 
 		if len(args) < 3 {
-			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa unsubscribe <station|zip> <code>")
+			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa unsubscribe station <code>")
 			return
 		}
 		code := args[2]
@@ -738,14 +747,8 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 			} else {
 				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Not subscribed to station %s", strings.ToUpper(code)))
 			}
-		} else if subType == "zip" {
-			if c.subscriptions.UnsubscribeFromZip(cmd.Source.User.Id, code) {
-				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Unsubscribed from zip code %s", code))
-			} else {
-				c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Not subscribed to zip code %s", code))
-			}
 		} else {
-			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station', 'zip', or 'all'")
+			c.SendMessage(cmd.Source.ChannelId, "Invalid subscription type. Use 'station' or 'all'")
 		}
 
 	case "recent":
@@ -771,16 +774,11 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 
 	case "list":
 		stations := c.subscriptions.GetUserStationSubscriptions(cmd.Source.User.Id)
-		zips := c.subscriptions.GetUserZipSubscriptions(cmd.Source.User.Id)
 
 		msg := "Your subscriptions:\n"
 		if len(stations) > 0 {
 			msg += fmt.Sprintf("Stations: %s\n", strings.Join(stations, ", "))
-		}
-		if len(zips) > 0 {
-			msg += fmt.Sprintf("Zip codes: %s\n", strings.Join(zips, ", "))
-		}
-		if len(stations) == 0 && len(zips) == 0 {
+		} else {
 			msg = "You have no active subscriptions"
 		}
 

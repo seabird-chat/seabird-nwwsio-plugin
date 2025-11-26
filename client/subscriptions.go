@@ -25,14 +25,12 @@ type Subscription struct {
 type SubscriptionManager struct {
 	mu                 sync.RWMutex
 	stationSubscribers map[string][]Subscription  // station code -> list of subscriptions
-	zipSubscribers     map[string][]string        // zip code -> list of user IDs
 	recentMessages     map[string][]RecentMessage // station code -> recent messages (last 5)
 }
 
 func NewSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{
 		stationSubscribers: make(map[string][]Subscription),
-		zipSubscribers:     make(map[string][]string),
 		recentMessages:     make(map[string][]RecentMessage),
 	}
 }
@@ -100,47 +98,6 @@ func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string
 	return false
 }
 
-func (sm *SubscriptionManager) SubscribeToZip(userID, zipCode string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if !contains(sm.zipSubscribers[zipCode], userID) {
-		sm.zipSubscribers[zipCode] = append(sm.zipSubscribers[zipCode], userID)
-	}
-}
-
-func (sm *SubscriptionManager) UnsubscribeFromZip(userID, zipCode string) bool {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	subscribers := sm.zipSubscribers[zipCode]
-	for i, id := range subscribers {
-		if id == userID {
-			sm.zipSubscribers[zipCode] = append(subscribers[:i], subscribers[i+1:]...)
-			if len(sm.zipSubscribers[zipCode]) == 0 {
-				delete(sm.zipSubscribers, zipCode)
-			}
-			return true
-		}
-	}
-	return false
-}
-
-func (sm *SubscriptionManager) GetStationSubscribers(stationCode string) []string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	stationCode = strings.ToUpper(stationCode)
-	subscriptions := sm.stationSubscribers[stationCode]
-
-	result := make([]string, len(subscriptions))
-	for i, sub := range subscriptions {
-		result[i] = sub.UserID
-	}
-	return result
-}
-
-// GetStationSubscriptions returns all subscriptions (with filters) for a station
 func (sm *SubscriptionManager) GetStationSubscriptions(stationCode string) []Subscription {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -169,19 +126,6 @@ func (sm *SubscriptionManager) GetUserStationSubscriptions(userID string) []stri
 	return stations
 }
 
-func (sm *SubscriptionManager) GetUserZipSubscriptions(userID string) []string {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	var zips []string
-	for zip, subscribers := range sm.zipSubscribers {
-		if contains(subscribers, userID) {
-			zips = append(zips, zip)
-		}
-	}
-	return zips
-}
-
 func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -201,19 +145,6 @@ func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 		}
 	}
 
-	for zip, subscribers := range sm.zipSubscribers {
-		for i, id := range subscribers {
-			if id == userID {
-				sm.zipSubscribers[zip] = append(subscribers[:i], subscribers[i+1:]...)
-				if len(sm.zipSubscribers[zip]) == 0 {
-					delete(sm.zipSubscribers, zip)
-				}
-				count++
-				break
-			}
-		}
-	}
-
 	return count
 }
 
@@ -225,7 +156,7 @@ func (sm *SubscriptionManager) AddRecentMessage(msg RecentMessage) {
 	messages := sm.recentMessages[station]
 
 	messages = append(messages, msg)
-	if len(messages) > 5 {
+	if len(messages) > MaxRecentMessages {
 		messages = messages[1:]
 	}
 
