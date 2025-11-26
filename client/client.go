@@ -611,6 +611,33 @@ func (c *SeabirdClient) handleCommandEvents() {
 	log.Warn().Int("total_events", eventCount).Msg("Event stream channel closed - exiting command handler")
 }
 
+func buildFilterConfirmation(stationCode string, filters []string) string {
+	var hasAll, hasCAP bool
+	var categories []string
+
+	for _, f := range filters {
+		switch strings.ToLower(f) {
+		case "all":
+			hasAll = true
+		case "cap":
+			hasCAP = true
+		default:
+			categories = append(categories, f)
+		}
+	}
+
+	if hasAll {
+		return fmt.Sprintf("You'll receive DMs for ALL weather products from %s.", stationCode)
+	}
+	if hasCAP && len(categories) == 0 {
+		return fmt.Sprintf("You'll receive DMs for emergency alerts (CAP) from %s.", stationCode)
+	}
+	if len(categories) > 0 && !hasCAP {
+		return fmt.Sprintf("You'll receive DMs for %s products from %s.", strings.Join(categories, ", "), stationCode)
+	}
+	return fmt.Sprintf("You'll receive DMs for CAP alerts and %s products from %s.", strings.Join(categories, ", "), stationCode)
+}
+
 func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent) {
 	log.Info().
 		Str("user_id", cmd.Source.User.Id).
@@ -642,23 +669,16 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 		subType := strings.ToLower(args[1])
 		code := args[2]
 
-		// Parse filter parameters (default to CAP only)
-		// Filters can be: "cap", "all", or category names like "Aviation", "Hydrology", "Marine", etc.
 		var filters []string
 		if len(args) >= 4 {
-			// Collect all remaining args as filters, split by comma if needed
 			for _, arg := range args[3:] {
-				// Support comma-separated filters (e.g., "cap,aviation" or "cap, aviation")
-				parts := strings.Split(arg, ",")
-				for _, part := range parts {
-					trimmed := strings.TrimSpace(part)
-					if trimmed != "" {
+				for _, part := range strings.Split(arg, ",") {
+					if trimmed := strings.TrimSpace(part); trimmed != "" {
 						filters = append(filters, trimmed)
 					}
 				}
 			}
 		}
-		// If no filters specified, default to ["cap"]
 		if len(filters) == 0 {
 			filters = []string{"cap"}
 		}
@@ -672,35 +692,8 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 			c.subscriptions.SubscribeToStation(cmd.Source.User.Id, code, filters)
 			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Subscribed to station %s with filters: %s", strings.ToUpper(code), strings.Join(filters, ", ")))
 
+			confirmMsg := buildFilterConfirmation(strings.ToUpper(code), filters)
 			recent := c.subscriptions.GetRecentMessages(code)
-			var confirmMsg string
-
-			// Build confirmation message based on filters
-			hasAll := false
-			hasCAP := false
-			categories := []string{}
-			for _, f := range filters {
-				fLower := strings.ToLower(f)
-				if fLower == "all" {
-					hasAll = true
-				} else if fLower == "cap" {
-					hasCAP = true
-				} else {
-					categories = append(categories, f)
-				}
-			}
-
-			if hasAll {
-				confirmMsg = fmt.Sprintf("You'll receive DMs for ALL weather products from %s.", strings.ToUpper(code))
-			} else if hasCAP && len(categories) == 0 {
-				confirmMsg = fmt.Sprintf("You'll receive DMs for emergency alerts (CAP) from %s.", strings.ToUpper(code))
-			} else if len(categories) > 0 && !hasCAP {
-				confirmMsg = fmt.Sprintf("You'll receive DMs for %s products from %s.", strings.Join(categories, ", "), strings.ToUpper(code))
-			} else {
-				// CAP + categories
-				confirmMsg = fmt.Sprintf("You'll receive DMs for CAP alerts and %s products from %s.", strings.Join(categories, ", "), strings.ToUpper(code))
-			}
-
 			if len(recent) > 0 {
 				lastMsg := recent[len(recent)-1]
 				confirmMsg += fmt.Sprintf("\nLast activity: %s (%s ago)",

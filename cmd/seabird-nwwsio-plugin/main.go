@@ -11,7 +11,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	seabirdPlugin "github.com/seabird-chat/seabird-nwwsio-plugin"
+	"github.com/seabird-chat/seabird-nwwsio-plugin/client"
 )
 
 func main() {
@@ -53,7 +53,7 @@ func main() {
 		log.Fatal().Msg("Missing NWWSIO_USERNAME or NWWSIO_PASSWORD")
 	}
 
-	c, err := seabirdPlugin.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
+	c, err := client.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize seabird client")
 	}
