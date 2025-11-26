@@ -367,3 +367,19 @@ var CommonProducts = map[string]ProductInfo{
 	"NOX": {Name: "Data Mgt Message", Category: "Data"},
 	"FOF": {Name: "Upper Wind Fallout Forecast", Category: "Forecast"},
 }
+
+// GetAllCategories returns all unique product categories from CommonProducts
+func GetAllCategories() []string {
+	categories := make(map[string]bool)
+	for _, product := range CommonProducts {
+		if product.Category != "" {
+			categories[product.Category] = true
+		}
+	}
+
+	result := make([]string, 0, len(categories))
+	for category := range categories {
+		result = append(result, category)
+	}
+	return result
+}

@@ -2,9 +2,12 @@ package client
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
 )
 
 type RecentMessage struct {
@@ -182,4 +185,39 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateFilters validates that all provided filters are either special filters or known product categories
+func ValidateFilters(filters []string) (invalidFilters []string) {
+	if len(filters) == 0 {
+		return nil
+	}
+
+	// Build set of valid filters
+	validFilters := make(map[string]bool)
+	validFilters["all"] = true
+	validFilters["cap"] = true
+
+	// Add all known product categories (case-insensitive)
+	for _, category := range nwwsio.GetAllCategories() {
+		validFilters[strings.ToLower(category)] = true
+	}
+
+	// Check each provided filter
+	for _, filter := range filters {
+		normalized := strings.ToLower(strings.TrimSpace(filter))
+		if !validFilters[normalized] {
+			invalidFilters = append(invalidFilters, filter)
+		}
+	}
+
+	return invalidFilters
+}
+
+// GetValidFilters returns a sorted list of all valid filter options
+func GetValidFilters() []string {
+	filters := []string{"all", "cap"}
+	categories := nwwsio.GetAllCategories()
+	sort.Strings(categories)
+	return append(filters, categories...)
 }

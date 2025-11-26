@@ -669,13 +669,21 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 
 	switch action {
 	case "help":
-		helpMsg := "NOAA Weather Alerts: !noaa subscribe station <CODE> | unsubscribe station <CODE> | unsubscribe all | list | recent <CODE> | help. Example: !noaa subscribe station KJAX"
+		helpMsg := "NOAA Weather Alerts: !noaa subscribe station <CODE> [filters...] | unsubscribe station <CODE> | unsubscribe all | list | recent <CODE> | filters | help. Example: !noaa subscribe station KJAX warning"
 		c.SendMessage(cmd.Source.ChannelId, helpMsg)
+
+	case "filters":
+		validFilters := GetValidFilters()
+		msg := "Valid filter options:\n"
+		msg += "Special: all, cap\n"
+		msg += "Categories: " + strings.Join(validFilters[2:], ", ")
+		c.SendMessage(cmd.Source.ChannelId, msg)
 
 	case "subscribe":
 		if len(args) < 3 {
 			c.SendMessage(cmd.Source.ChannelId, "Usage: !noaa subscribe station <code> [filters...]")
-			c.SendMessage(cmd.Source.ChannelId, "Filters: cap (default), all, Aviation, Hydrology, Marine, Fire Weather, etc.")
+			c.SendMessage(cmd.Source.ChannelId, "Filters: cap (default), all, or any product category")
+			c.SendMessage(cmd.Source.ChannelId, "Use '!noaa filters' to see all valid filter options")
 			return
 		}
 		subType := strings.ToLower(args[1])
@@ -693,6 +701,13 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 		}
 		if len(filters) == 0 {
 			filters = []string{"cap"}
+		}
+
+		// Validate filters before subscribing
+		if invalidFilters := ValidateFilters(filters); len(invalidFilters) > 0 {
+			c.SendMessage(cmd.Source.ChannelId, fmt.Sprintf("Invalid filter(s): %s", strings.Join(invalidFilters, ", ")))
+			c.SendMessage(cmd.Source.ChannelId, "Use '!noaa filters' to see all valid filter options")
+			return
 		}
 
 		if subType == "station" {
