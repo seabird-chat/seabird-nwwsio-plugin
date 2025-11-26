@@ -278,20 +278,90 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 			productCategory = awipsID.GetProductCategory()
 		}
 
-		log.Info().
-			Str("cccc", messageNWWSIOX.Cccc).
-			Str("ttaaii", messageNWWSIOX.Ttaaii).
-			Str("wmo_type", productID.GetDataType()).
-			Str("awipsid", messageNWWSIOX.AwipsID).
-			Str("product", productName).
-			Str("category", productCategory).
-			Str("issue", messageNWWSIOX.Issue).
-			Msg("Received weather product")
+		// Try to parse CAP (Common Alerting Protocol) message
+		var capAlert *nwwsio.Alert
+		if productID.T1 == "X" || strings.Contains(messageNWWSIOX.Text, "<alert") {
+			var err error
+			capAlert, err = nwwsio.ParseCAP(messageNWWSIOX.Text)
+			if err != nil {
+				log.Debug().Err(err).Msg("Failed to parse CAP message")
+			} else if capAlert != nil {
+				// Successfully parsed CAP message
+				info := capAlert.GetPrimaryInfo()
+				if info != nil {
+					// Log CAP-specific fields
+					logEvent := log.Info().
+						Str("cccc", messageNWWSIOX.Cccc).
+						Str("ttaaii", messageNWWSIOX.Ttaaii).
+						Str("wmo_type", productID.GetDataType()).
+						Str("awipsid", messageNWWSIOX.AwipsID).
+						Str("product", productName).
+						Str("category", productCategory).
+						Str("issue", messageNWWSIOX.Issue).
+						Str("cap_event", info.Event).
+						Str("cap_severity", info.Severity).
+						Str("cap_urgency", info.Urgency).
+						Str("cap_certainty", info.Certainty)
+
+					// Add areas if present
+					if len(info.Area) > 0 {
+						logEvent.Str("cap_areas", info.Area[0].AreaDesc)
+					}
+
+					// Add headline if present
+					if info.Headline != "" {
+						logEvent.Str("cap_headline", info.Headline)
+					}
+
+					logEvent.Msg("Received CAP alert")
+				} else {
+					log.Info().
+						Str("cccc", messageNWWSIOX.Cccc).
+						Str("ttaaii", messageNWWSIOX.Ttaaii).
+						Str("wmo_type", productID.GetDataType()).
+						Str("awipsid", messageNWWSIOX.AwipsID).
+						Str("product", productName).
+						Str("category", productCategory).
+						Str("issue", messageNWWSIOX.Issue).
+						Msg("Received CAP alert (no info block)")
+				}
+			} else {
+				// Not a CAP message, log normally
+				log.Info().
+					Str("cccc", messageNWWSIOX.Cccc).
+					Str("ttaaii", messageNWWSIOX.Ttaaii).
+					Str("wmo_type", productID.GetDataType()).
+					Str("awipsid", messageNWWSIOX.AwipsID).
+					Str("product", productName).
+					Str("category", productCategory).
+					Str("issue", messageNWWSIOX.Issue).
+					Msg("Received weather product")
+			}
+		} else {
+			// Non-CAP message, log normally
+			log.Info().
+				Str("cccc", messageNWWSIOX.Cccc).
+				Str("ttaaii", messageNWWSIOX.Ttaaii).
+				Str("wmo_type", productID.GetDataType()).
+				Str("awipsid", messageNWWSIOX.AwipsID).
+				Str("product", productName).
+				Str("category", productCategory).
+				Str("issue", messageNWWSIOX.Issue).
+				Msg("Received weather product")
+		}
 
 		// Store both WMO data type and AWIPS product name for flexibility
 		displayName := productName
 		if productCategory != "Unknown" {
 			displayName = fmt.Sprintf("%s (%s)", productName, productCategory)
+		}
+
+		// If this is a CAP message with parsed data, enhance the display name
+		if capAlert != nil {
+			info := capAlert.GetPrimaryInfo()
+			if info != nil && info.Event != "" {
+				displayName = fmt.Sprintf("%s [%s/%s]", info.Event, info.Severity, info.Urgency)
+			}
 		}
 
 		client.subscriptions.AddRecentMessage(RecentMessage{
@@ -305,16 +375,57 @@ func handleMessage(s xmpp.Sender, p stanza.Packet, client *SeabirdClient) {
 
 		subscribers := client.subscriptions.GetStationSubscribers(messageNWWSIOX.Cccc)
 		if len(subscribers) > 0 {
-			alertMsg := fmt.Sprintf(
-				"[%s] %s\n"+
-					"Product: %s | Issued: %s\n\n"+
-					"%s",
-				messageNWWSIOX.Cccc,
-				productName,
-				messageNWWSIOX.AwipsID,
-				messageNWWSIOX.Issue,
-				truncateText(messageNWWSIOX.Text, 1000),
-			)
+			var alertMsg string
+
+			// Format alert message differently for CAP vs regular products
+			if capAlert != nil && capAlert.GetPrimaryInfo() != nil {
+				info := capAlert.GetPrimaryInfo()
+				alertMsg = fmt.Sprintf(
+					"[%s] %s\n"+
+						"Severity: %s | Urgency: %s | Certainty: %s\n"+
+						"Product: %s | Issued: %s\n",
+					messageNWWSIOX.Cccc,
+					info.Event,
+					info.Severity,
+					info.Urgency,
+					info.Certainty,
+					messageNWWSIOX.AwipsID,
+					messageNWWSIOX.Issue,
+				)
+
+				// Add headline if present
+				if info.Headline != "" {
+					alertMsg += fmt.Sprintf("\n%s\n", info.Headline)
+				}
+
+				// Add areas if present
+				if len(info.Area) > 0 && info.Area[0].AreaDesc != "" {
+					alertMsg += fmt.Sprintf("\nAffected Areas: %s\n", info.Area[0].AreaDesc)
+				}
+
+				// Add description or instruction
+				if info.Description != "" {
+					alertMsg += fmt.Sprintf("\n%s", truncateText(info.Description, 800))
+				} else {
+					alertMsg += fmt.Sprintf("\n%s", truncateText(messageNWWSIOX.Text, 800))
+				}
+
+				if info.Instruction != "" {
+					alertMsg += fmt.Sprintf("\n\nInstructions: %s", truncateText(info.Instruction, 200))
+				}
+			} else {
+				// Regular product format
+				alertMsg = fmt.Sprintf(
+					"[%s] %s\n"+
+						"Product: %s | Issued: %s\n\n"+
+						"%s",
+					messageNWWSIOX.Cccc,
+					productName,
+					messageNWWSIOX.AwipsID,
+					messageNWWSIOX.Issue,
+					truncateText(messageNWWSIOX.Text, 1000),
+				)
+			}
 
 			for _, userID := range subscribers {
 				client.SendPrivateMessage(userID, alertMsg)
