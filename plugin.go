@@ -172,9 +172,14 @@ func NewNWWSIOClient(nwwsioUsername, nwwsioPassword, instanceID string, mucJID *
 	router.HandleFunc("message", func(s xmpp.Sender, p stanza.Packet) {
 		handleMessage(s, p, client)
 	})
+	router.HandleFunc("presence", func(s xmpp.Sender, p stanza.Packet) {
+		handlePresence(s, p, mucJID)
+	})
 	router.NewRoute().IQNamespaces("jabber:iq:version").HandlerFunc(handleVersion)
 
-	onlineClient, err := xmpp.NewClient(onlineClientConfig, router, errorHandler)
+	onlineClient, err := xmpp.NewClient(onlineClientConfig, router, func(err error) {
+		mucErrorHandler(err, mucJID)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -300,6 +305,57 @@ func truncateText(text string, maxLen int) string {
 
 func errorHandler(err error) {
 	log.Error().Err(err).Msg("XMPP error")
+}
+
+// mucErrorHandler provides enhanced error handling with MUC recovery
+func mucErrorHandler(err error, mucJID *stanza.Jid) {
+	errMsg := err.Error()
+
+	// Check for MUC namespace errors
+	if strings.Contains(errMsg, "unknown namespace") && strings.Contains(errMsg, "jabber.org/protocol/muc") {
+		log.Warn().
+			Err(err).
+			Str("muc_jid", mucJID.Full()).
+			Msg("MUC namespace parsing error detected - this is a known issue with certain presence stanzas, ignoring")
+		// Don't attempt rejoin for namespace errors - they're usually non-fatal parsing issues
+		return
+	}
+
+	// For other errors, log them normally
+	log.Error().Err(err).Msg("XMPP error")
+}
+
+// handlePresence handles XMPP presence stanzas, particularly for MUC
+func handlePresence(s xmpp.Sender, p stanza.Packet, mucJID *stanza.Jid) {
+	presence, ok := p.(*stanza.Presence)
+	if !ok {
+		return
+	}
+
+	log.Debug().
+		Str("from", presence.From).
+		Str("to", presence.To).
+		Str("type", string(presence.Type)).
+		Msg("Received presence stanza")
+
+	// Check for error presences from the MUC
+	if presence.Type == stanza.PresenceTypeError && strings.HasPrefix(presence.From, mucJID.Bare()) {
+		log.Warn().
+			Str("from", presence.From).
+			Str("error_type", string(presence.Type)).
+			Msg("Received error presence from MUC")
+
+		// Attempt to rejoin the MUC after a short delay
+		go func() {
+			time.Sleep(5 * time.Second)
+			log.Info().Str("muc_jid", mucJID.Full()).Msg("Attempting to rejoin MUC after error")
+			if err := joinMUC(s, mucJID); err != nil {
+				log.Error().Err(err).Msg("Failed to rejoin MUC")
+			} else {
+				log.Info().Msg("Successfully rejoined MUC")
+			}
+		}()
+	}
 }
 
 func handleVersion(c xmpp.Sender, p stanza.Packet) {
