@@ -53,7 +53,12 @@ func main() {
 		log.Fatal().Msg("Missing NWWSIO_USERNAME or NWWSIO_PASSWORD")
 	}
 
-	c, err := client.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword)
+	subscriptionFile := os.Getenv("SUBSCRIPTION_FILE")
+	if subscriptionFile == "" {
+		subscriptionFile = "./data/subscriptions.json"
+	}
+
+	c, err := client.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword, subscriptionFile)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize seabird client")
 	}

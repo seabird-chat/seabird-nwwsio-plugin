@@ -68,7 +68,7 @@ type SeabirdClient struct {
 }
 
 // NewSeabirdClient returns a new seabird client
-func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPassword string) (*SeabirdClient, error) {
+func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPassword, subscriptionFile string) (*SeabirdClient, error) {
 	log.Info().Str("url", seabirdCoreURL).Msg("Connecting to seabird-core")
 	seabirdClient, err := seabird.NewClient(seabirdCoreURL, seabirdCoreToken)
 	if err != nil {
@@ -91,6 +91,16 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 		lastSequence:  make(map[string]int),
 	}
 
+	// Set up persistence if configured
+	if subscriptionFile != "" {
+		client.subscriptions.SetPersistenceFile(subscriptionFile)
+		if err := client.subscriptions.Load(); err != nil {
+			log.Error().Err(err).Msg("Failed to load subscriptions from file")
+		}
+	} else {
+		log.Warn().Msg("No subscription file configured - subscriptions will not persist across restarts")
+	}
+
 	log.Info().Str("username", nwwsioUsername).Msg("Connecting to NWWS-IO")
 	nwwsioClient, nwwsXMPPClient, err := NewNWWSIOClient(nwwsioUsername, nwwsioPassword, instanceID, mucJID, client)
 	if err != nil {
@@ -110,6 +120,13 @@ func (c *SeabirdClient) Shutdown() error {
 	// Cancel the context to signal all goroutines to stop
 	if c.cancelFunc != nil {
 		c.cancelFunc()
+	}
+
+	// Save subscriptions before shutting down
+	if c.subscriptions != nil {
+		if err := c.subscriptions.Close(); err != nil {
+			log.Error().Err(err).Msg("Failed to save subscriptions during shutdown")
+		}
 	}
 
 	if c.nwwsXMPPClient != nil && c.mucJID != nil {
