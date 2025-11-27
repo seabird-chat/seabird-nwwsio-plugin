@@ -72,7 +72,7 @@ type NWWSOIMessageXExtension struct {
 func (n *NWWSOIMessageXExtension) GetSequenceID() (processName string, sequenceID int, err error) {
 	splitID := strings.Split(n.ID, ".")
 	if len(splitID) != 2 {
-		return "", 0, fmt.Errorf("Failed to parse AWIPS ID (%s): %w", n.ID, err)
+		return "", 0, fmt.Errorf("Failed to parse AWIPS ID (%s): expected format 'processID.sequenceID'", n.ID)
 	}
 
 	processName = splitID[0]

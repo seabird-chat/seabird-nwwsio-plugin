@@ -30,12 +30,12 @@ const (
 	NWWSResource    string = "nwws"
 
 	// Message limits
-	MaxRecentMessages       = 5
-	MaxCAPDescriptionLen    = 800
-	MaxCAPInstructionLen    = 200
-	MaxRegularProductLen    = 1000
-	MUCReconnectDelay       = 5 * time.Second
-	ConnectionTimeout       = 3 * time.Second
+	MaxRecentMessages    = 5
+	MaxCAPDescriptionLen = 800
+	MaxCAPInstructionLen = 200
+	MaxRegularProductLen = 1000
+	MUCReconnectDelay    = 5 * time.Second
+	ConnectionTimeout    = 3 * time.Second
 )
 
 var Version = "v0.0.0-dev"
@@ -159,6 +159,8 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword, instanceID string) (
 	err = client.Connect()
 	if err != nil {
 		log.Warn().Err(err).Str("failed_site", NWWSCollegePark).Str("trying_site", NWWSBoulder).Msg("Failed to connect to NWWS-IO server, trying backup")
+		_ = client.Disconnect()
+
 		boulderConfig := xmpp.TransportConfiguration{
 			Address: fmt.Sprintf("%s:%s", NWWSBoulder, NWWSServerPort),
 			Domain:  NWWSDomain,
@@ -173,6 +175,7 @@ func getAvailableNWWSIOSite(nwwsioUsername, nwwsioPassword, instanceID string) (
 		log.Info().Str("site", config.Address).Msg("Testing connection to NWWS-IO site")
 		err = client.Connect()
 		if err != nil {
+			_ = client.Disconnect()
 			log.Error().Msg("Failed to connect to all NWWS-IO sites")
 			return nil, fmt.Errorf("Failed to connect to all NWWS-IO sites")
 		}
@@ -628,16 +631,15 @@ func (c *SeabirdClient) handleCommandEvents(ctx context.Context) {
 
 	stream, err := c.Client.StreamEvents(commands)
 	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
+			log.Fatal().Err(err).Msg("Another instance of this plugin is already running. Please stop the other instance first.")
+		}
 		log.Error().Err(err).Msg("Failed to stream events")
 		return
 	}
 	defer func() {
 		log.Info().Msg("Closing event stream")
 		if err := stream.Close(); err != nil {
-			// Check if error is AlreadyExists (another instance running)
-			if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
-				log.Fatal().Err(err).Msg("Another instance of this plugin is already running. Please stop the other instance first.")
-			}
 			log.Error().Err(err).Msg("Error closing stream")
 		}
 	}()
@@ -851,6 +853,7 @@ func (c *SeabirdClient) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.ctx = ctx
 	c.cancelFunc = cancel
+	defer cancel()
 
 	g, gctx := errgroup.WithContext(ctx)
 
