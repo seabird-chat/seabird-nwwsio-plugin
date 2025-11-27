@@ -61,6 +61,10 @@ type SeabirdClient struct {
 	// Sequence tracking for detecting missed messages
 	sequenceMu   sync.Mutex
 	lastSequence map[string]int // maps processID -> last sequence number
+
+	// Context for graceful shutdown
+	ctx        context.Context
+	cancelFunc context.CancelFunc
 }
 
 // NewSeabirdClient returns a new seabird client
@@ -102,6 +106,11 @@ func NewSeabirdClient(seabirdCoreURL, seabirdCoreToken, nwwsioUsername, nwwsioPa
 
 func (c *SeabirdClient) Shutdown() error {
 	log.Info().Msg("Shutting down gracefully")
+
+	// Cancel the context to signal all goroutines to stop
+	if c.cancelFunc != nil {
+		c.cancelFunc()
+	}
 
 	if c.nwwsXMPPClient != nil && c.mucJID != nil {
 		err := c.nwwsXMPPClient.Send(stanza.Presence{
@@ -606,7 +615,7 @@ func (c *SeabirdClient) SendPrivateMessage(userID, text string) {
 	}
 }
 
-func (c *SeabirdClient) handleCommandEvents() {
+func (c *SeabirdClient) handleCommandEvents(ctx context.Context) {
 	commands := map[string]*pb.CommandMetadata{
 		"noaa": {
 			Name:      "noaa",
@@ -636,15 +645,23 @@ func (c *SeabirdClient) handleCommandEvents() {
 	log.Info().Msg("Event stream established - ready to receive commands")
 
 	eventCount := 0
-	for event := range stream.C {
-		eventCount++
-		log.Info().Int("event_count", eventCount).Msg("Received event from stream")
-		if cmd := event.GetCommand(); cmd != nil {
-			c.handleNoaaCommand(event, cmd)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("Context cancelled - stopping command handler")
+			return
+		case event, ok := <-stream.C:
+			if !ok {
+				log.Warn().Int("total_events", eventCount).Msg("Event stream channel closed - exiting command handler")
+				return
+			}
+			eventCount++
+			log.Info().Int("event_count", eventCount).Msg("Received event from stream")
+			if cmd := event.GetCommand(); cmd != nil {
+				c.handleNoaaCommand(event, cmd)
+			}
 		}
 	}
-
-	log.Warn().Int("total_events", eventCount).Msg("Event stream channel closed - exiting command handler")
 }
 
 func buildFilterConfirmation(stationCode string, filters []string) string {
@@ -830,7 +847,12 @@ func (c *SeabirdClient) handleNoaaCommand(event *pb.Event, cmd *pb.CommandEvent)
 
 // Run runs both the NWWS client and seabird command handler concurrently
 func (c *SeabirdClient) Run() error {
-	g, _ := errgroup.WithContext(context.Background())
+	// Create a cancellable context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	c.ctx = ctx
+	c.cancelFunc = cancel
+
+	g, gctx := errgroup.WithContext(ctx)
 
 	log.Info().Msg("Starting NWWS-IO client")
 	g.Go(func() error {
@@ -839,7 +861,7 @@ func (c *SeabirdClient) Run() error {
 
 	log.Info().Msg("Starting seabird command handler")
 	g.Go(func() error {
-		c.handleCommandEvents()
+		c.handleCommandEvents(gctx)
 		return nil
 	})
 
