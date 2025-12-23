@@ -268,10 +268,7 @@ func (sm *SubscriptionManager) SubscribeToStation(userID, stationCode string, fi
 		Filters: normalizedFilters,
 	})
 
-	// Trigger auto-save
-	sm.mu.Unlock()
 	sm.triggerAutoSave()
-	sm.mu.Lock()
 }
 
 func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string) bool {
@@ -288,11 +285,7 @@ func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string
 				delete(sm.stationSubscribers, stationCode)
 			}
 
-			// Trigger auto-save
-			sm.mu.Unlock()
 			sm.triggerAutoSave()
-			sm.mu.Lock()
-
 			return true
 		}
 	}
@@ -347,10 +340,7 @@ func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 	}
 
 	if count > 0 {
-		// Trigger auto-save
-		sm.mu.Unlock()
 		sm.triggerAutoSave()
-		sm.mu.Lock()
 	}
 
 	return count
@@ -381,15 +371,6 @@ func (sm *SubscriptionManager) GetRecentMessages(stationCode string) []RecentMes
 	result := make([]RecentMessage, len(messages))
 	copy(result, messages)
 	return result
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 // ValidateFilters validates that all provided filters are either special filters or known product categories
