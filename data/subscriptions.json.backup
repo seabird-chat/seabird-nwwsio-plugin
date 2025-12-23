@@ -1,0 +1,18 @@
+{
+  "KARB": [
+    {
+      "UserID": "irc://seabird/ghavil",
+      "Filters": [
+        "cap"
+      ]
+    }
+  ],
+  "KDTX": [
+    {
+      "UserID": "irc://seabird/ghavil",
+      "Filters": [
+        "cap"
+      ]
+    }
+  ]
+}
