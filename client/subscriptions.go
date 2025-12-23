@@ -326,16 +326,22 @@ func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 
 	count := 0
 
-	for station, subscriptions := range sm.stationSubscribers {
-		for i, sub := range subscriptions {
+	for station := range sm.stationSubscribers {
+		subscriptions := sm.stationSubscribers[station]
+		newSubs := make([]Subscription, 0, len(subscriptions))
+
+		for _, sub := range subscriptions {
 			if sub.UserID == userID {
-				sm.stationSubscribers[station] = append(subscriptions[:i], subscriptions[i+1:]...)
-				if len(sm.stationSubscribers[station]) == 0 {
-					delete(sm.stationSubscribers, station)
-				}
 				count++
-				break
+			} else {
+				newSubs = append(newSubs, sub)
 			}
+		}
+
+		if len(newSubs) == 0 {
+			delete(sm.stationSubscribers, station)
+		} else if len(newSubs) != len(subscriptions) {
+			sm.stationSubscribers[station] = newSubs
 		}
 	}
 
