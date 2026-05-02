@@ -1,6 +1,6 @@
 module github.com/seabird-chat/seabird-nwwsio-plugin
 
-go 1.25.5
+go 1.26.2
 
 require (
 	github.com/joho/godotenv v1.5.1
@@ -8,6 +8,7 @@ require (
 	github.com/rs/zerolog v1.34.0
 	github.com/seabird-chat/seabird-go v0.6.1
 	golang.org/x/sync v0.18.0
+	google.golang.org/grpc v1.71.1
 	gosrc.io/xmpp v0.5.1
 )
 
@@ -19,7 +20,6 @@ require (
 	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250409194420-de1ac958c67a // indirect
-	google.golang.org/grpc v1.71.1 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 )
