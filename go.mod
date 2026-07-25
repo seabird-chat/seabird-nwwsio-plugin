@@ -5,7 +5,7 @@ go 1.26.2
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-isatty v0.0.22
-	github.com/rs/zerolog v1.34.0
+	github.com/rs/zerolog v1.35.1
 	github.com/seabird-chat/seabird-go v0.6.1
 	golang.org/x/sync v0.21.0
 	google.golang.org/grpc v1.79.3
