@@ -7,7 +7,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20
 	github.com/rs/zerolog v1.34.0
 	github.com/seabird-chat/seabird-go v0.6.1
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.21.0
 	google.golang.org/grpc v1.79.3
 	gosrc.io/xmpp v0.5.1
 )
