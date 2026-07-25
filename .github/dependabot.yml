@@ -1,11 +1,54 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot configuration.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Minor and patch bumps are grouped into one PR per ecosystem. Ungrouped, a
+# batch of go.mod bumps turns into a conflict cascade: merging the first PR
+# puts every sibling behind on go.sum, so each one needs a rebase before it
+# can land. Majors stay on their own PR so a breaking change is reviewed on
+# its own, and security updates are intentionally left ungrouped (the group
+# is scoped to version-updates) so a fix ships without waiting for a batch.
 
 version: 2
 updates:
-  - package-ecosystem: "gomod" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "gomod"
+    directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      gomod-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The plugin's only `uses:` is a reusable workflow pinned to @main, which
+  # Dependabot cannot bump (it is a branch, not a version). This entry is here
+  # so any action pinned inline later is covered from day one; the pins in the
+  # shared seabird-chat/ci repo need their own config to be watched.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
