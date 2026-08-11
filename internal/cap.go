@@ -11,22 +11,22 @@ import (
 
 // Alert is the root element of a CAP message
 type Alert struct {
-	XMLName    xml.Name `xml:"alert"`
-	Xmlns      string   `xml:"xmlns,attr"`
-	Identifier string   `xml:"identifier"`
-	Sender     string   `xml:"sender"`
-	Sent       string   `xml:"sent"`
-	Status     string   `xml:"status"`     // Actual, Exercise, System, Test, Draft
-	MsgType    string   `xml:"msgType"`    // Alert, Update, Cancel, Ack, Error
-	Source     string   `xml:"source"`     // Optional
-	Scope      string   `xml:"scope"`      // Public, Restricted, Private
-	Restriction string  `xml:"restriction"` // Optional
-	Addresses  string   `xml:"addresses"`  // Optional
-	Code       []string `xml:"code"`       // Optional, multiple
-	Note       string   `xml:"note"`       // Optional
-	References string   `xml:"references"` // Optional
-	Incidents  string   `xml:"incidents"`  // Optional
-	Info       []Info   `xml:"info"`       // At least one Info block
+	XMLName     xml.Name `xml:"alert"`
+	Xmlns       string   `xml:"xmlns,attr"`
+	Identifier  string   `xml:"identifier"`
+	Sender      string   `xml:"sender"`
+	Sent        string   `xml:"sent"`
+	Status      string   `xml:"status"`      // Actual, Exercise, System, Test, Draft
+	MsgType     string   `xml:"msgType"`     // Alert, Update, Cancel, Ack, Error
+	Source      string   `xml:"source"`      // Optional
+	Scope       string   `xml:"scope"`       // Public, Restricted, Private
+	Restriction string   `xml:"restriction"` // Optional
+	Addresses   string   `xml:"addresses"`   // Optional
+	Code        []string `xml:"code"`        // Optional, multiple
+	Note        string   `xml:"note"`        // Optional
+	References  string   `xml:"references"`  // Optional
+	Incidents   string   `xml:"incidents"`   // Optional
+	Info        []Info   `xml:"info"`        // At least one Info block
 }
 
 // Info contains the details of the alert
@@ -56,12 +56,12 @@ type Info struct {
 
 // Area describes a geographic area
 type Area struct {
-	AreaDesc string      `xml:"areaDesc"`        // Human-readable description
-	Polygon  []string    `xml:"polygon"`         // Optional, multiple, space-separated lat/lon pairs
-	Circle   []string    `xml:"circle"`          // Optional, multiple, "lat,lon radius"
-	Geocode  []ValuePair `xml:"geocode"`         // Optional, multiple (SAME, UGC codes)
-	Altitude string      `xml:"altitude"`        // Optional
-	Ceiling  string      `xml:"ceiling"`         // Optional
+	AreaDesc string      `xml:"areaDesc"` // Human-readable description
+	Polygon  []string    `xml:"polygon"`  // Optional, multiple, space-separated lat/lon pairs
+	Circle   []string    `xml:"circle"`   // Optional, multiple, "lat,lon radius"
+	Geocode  []ValuePair `xml:"geocode"`  // Optional, multiple (SAME, UGC codes)
+	Altitude string      `xml:"altitude"` // Optional
+	Ceiling  string      `xml:"ceiling"`  // Optional
 }
 
 // ValuePair represents a name-value pair used in parameters and geocodes
@@ -74,10 +74,10 @@ type ValuePair struct {
 type Resource struct {
 	ResourceDesc string `xml:"resourceDesc"`
 	MimeType     string `xml:"mimeType"`
-	Size         int    `xml:"size"`         // Optional, bytes
-	URI          string `xml:"uri"`          // Optional
-	DerefURI     string `xml:"derefUri"`     // Optional, base64 encoded
-	Digest       string `xml:"digest"`       // Optional, SHA-1 hash
+	Size         int    `xml:"size"`     // Optional, bytes
+	URI          string `xml:"uri"`      // Optional
+	DerefURI     string `xml:"derefUri"` // Optional, base64 encoded
+	Digest       string `xml:"digest"`   // Optional, SHA-1 hash
 }
 
 // ParseCAP attempts to parse a CAP message from XML text

@@ -208,7 +208,6 @@ type AWIPSProductID struct {
 	XXX string // 1-3 character geographic designator
 }
 
-
 // ParseAwipsID parses the AWIPS identifier into its components
 func (n *NWWSOIMessageXExtension) ParseAwipsID() (*AWIPSProductID, error) {
 	// Trim whitespace that may come from XML parsing

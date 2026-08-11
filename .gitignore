@@ -68,3 +68,6 @@ Temporary Items
 # Ignore local .env
 .env
 bin/
+
+.direnv
+/result
