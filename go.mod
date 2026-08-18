@@ -3,7 +3,6 @@ module github.com/seabird-chat/seabird-nwwsio-plugin
 go 1.26.2
 
 require (
-	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-isatty v0.0.24
 	github.com/rs/zerolog v1.35.1
 	github.com/seabird-chat/seabird-go v0.6.1

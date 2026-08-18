@@ -7,7 +7,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -15,8 +14,6 @@ import (
 )
 
 func main() {
-	_ = godotenv.Load()
-
 	if isatty.IsTerminal(os.Stdout.Fd()) {
 		consoleWriter := zerolog.NewConsoleWriter()
 		consoleWriter.FormatLevel = func(i interface{}) string {
