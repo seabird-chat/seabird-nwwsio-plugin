@@ -10,7 +10,7 @@
 # deployment events meaning only "an actual deploy-rs run".
 steps:
   - name: trigger-dev-bump
-    image: woodpeckerci/woodpecker-cli:v3.17-alpine
+    image: woodpeckerci/woodpecker-cli:v3.18-alpine
     environment:
       WOODPECKER_SERVER: ${CI_SYSTEM_URL}
       WOODPECKER_TOKEN:
@@ -26,7 +26,7 @@ steps:
         branch: main
 
   - name: trigger-release-bump
-    image: woodpeckerci/woodpecker-cli:v3.17-alpine
+    image: woodpeckerci/woodpecker-cli:v3.18-alpine
     environment:
       WOODPECKER_SERVER: ${CI_SYSTEM_URL}
       WOODPECKER_TOKEN:

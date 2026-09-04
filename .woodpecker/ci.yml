@@ -5,7 +5,7 @@ when:
 
 steps:
   check-fmt:
-    image: nixos/nix:2.35.1
+    image: nixos/nix:2.35.2
     environment:
       NIX_CONFIG: |
         experimental-features = nix-command flakes
@@ -14,7 +14,7 @@ steps:
       - nix fmt -- --ci
 
   build:
-    image: nixos/nix:2.35.1
+    image: nixos/nix:2.35.2
     environment:
       NIX_CONFIG: |
         experimental-features = nix-command flakes
