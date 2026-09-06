@@ -1,6 +1,6 @@
 module github.com/seabird-chat/seabird-nwwsio-plugin
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/mattn/go-isatty v0.0.24
@@ -8,7 +8,7 @@ require (
 	github.com/seabird-chat/seabird-go v0.6.1
 	golang.org/x/sync v0.22.0
 	google.golang.org/grpc v1.83.2
-	gosrc.io/xmpp v0.5.1
+	gosrc.io/xmpp v0.5.2-0.20260819202247-98830ceeb5d2
 )
 
 require (
@@ -23,4 +23,4 @@ require (
 	nhooyr.io/websocket v1.8.17 // indirect
 )
 
-replace gosrc.io/xmpp => github.com/jaredledvina/go-xmpp v0.0.0-20250412144549-ab19715da354
+replace gosrc.io/xmpp => github.com/jaredledvina/go-xmpp v0.0.0-20260906030935-5766e48a7d9b

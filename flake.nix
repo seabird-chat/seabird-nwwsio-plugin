@@ -40,25 +40,26 @@
             };
           };
 
-          packages.default = pkgs.buildGoModule rec {
+          packages.default = pkgs.buildGo127Module rec {
             pname = "seabird-nwwsio-plugin";
             version = "0.3.2-dev";
 
             src = ./.;
 
-            vendorHash = "sha256-G9pMD3Fr+PZ9Jvum75smgctDzG1M/o6NOyE2Gx7KhJ0=";
+            vendorHash = "sha256-x1nPem9OiKab7B0bo4QbKCAV+oSLZL1ZwNxMA4lAQB4=";
 
             subPackages = [ "cmd/${pname}" ];
 
             ldflags = [
               "-s"
               "-w"
+              "-X github.com/seabird-chat/seabird-nwwsio-plugin/client.Version=v${version}"
             ];
           };
 
           devShells.default = pkgs.mkShell {
             nativeBuildInputs = [
-              pkgs.go
+              pkgs.go_1_27
               pkgs.gopls
             ];
           };

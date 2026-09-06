@@ -1,6 +1,6 @@
 steps:
   - name: advance-release
-    image: alpine/git
+    image: alpine/git:v2.54.0
     commands:
       - git push https://seabird-bot:$${FORGEJO_TOKEN}@forgejo.elwert.cloud/seabird-chat/${CI_REPO_NAME}.git ${CI_COMMIT_SHA}:refs/heads/release
     environment:
