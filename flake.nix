@@ -42,7 +42,7 @@
 
           packages.default = pkgs.buildGoModule rec {
             pname = "seabird-nwwsio-plugin";
-            version = "0.4.1";
+            version = "0.4.2-dev";
 
             src = ./.;
 
