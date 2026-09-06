@@ -75,3 +75,4 @@ bin/
 # Runtime artifacts written next to SUBSCRIPTION_FILE
 *.backup
 *.tmp
+data/subscriptions.json
