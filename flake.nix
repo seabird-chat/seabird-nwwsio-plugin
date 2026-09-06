@@ -40,7 +40,7 @@
             };
           };
 
-          packages.default = pkgs.buildGo127Module rec {
+          packages.default = pkgs.buildGoModule rec {
             pname = "seabird-nwwsio-plugin";
             version = "0.4.1-dev";
 
@@ -59,7 +59,7 @@
 
           devShells.default = pkgs.mkShell {
             nativeBuildInputs = [
-              pkgs.go_1_27
+              pkgs.go
               pkgs.gopls
             ];
           };
