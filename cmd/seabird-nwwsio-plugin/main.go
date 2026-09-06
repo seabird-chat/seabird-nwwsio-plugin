@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -24,9 +25,7 @@ func main() {
 		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	}
 
-	// Set log level from environment variable, default to Info
-	logLevel := os.Getenv("LOG_LEVEL")
-	switch strings.ToLower(logLevel) {
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
 	case "debug":
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	case "warn":
@@ -55,7 +54,14 @@ func main() {
 		subscriptionFile = "./data/subscriptions.json"
 	}
 
-	c, err := client.NewSeabirdClient(coreURL, coreToken, nwwsioUsername, nwwsioPassword, subscriptionFile)
+	c, err := client.NewSeabirdClient(client.Config{
+		SeabirdCoreURL:     coreURL,
+		SeabirdCoreToken:   coreToken,
+		NWWSIOUsername:     nwwsioUsername,
+		NWWSIOPassword:     nwwsioPassword,
+		SubscriptionFile:   subscriptionFile,
+		FilterTestMessages: envBool("FILTER_TEST_MESSAGES", true),
+	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize seabird client")
 	}
@@ -75,4 +81,17 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to run client")
 	}
+}
+
+func envBool(name string, def bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return def
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Warn().Str("var", name).Str("value", value).Bool("default", def).Msg("Invalid boolean environment variable, using default")
+		return def
+	}
+	return parsed
 }

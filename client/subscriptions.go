@@ -14,6 +14,8 @@ import (
 	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
 )
 
+const MaxRecentMessages = 5
+
 type RecentMessage struct {
 	Station   string
 	DataType  string
@@ -23,85 +25,138 @@ type RecentMessage struct {
 	Timestamp time.Time
 }
 
-// Subscription represents a user's subscription to a station with filtering
 type Subscription struct {
 	UserID  string
-	Filters []string // Filters: "cap", "all", or category names (Aviation, Hydrology, Marine, etc.)
+	Filters []string // "cap", "all", or product category names
+}
+
+type UserSubscription struct {
+	Code    string
+	Filters []string
+}
+
+// Files without a version key are the original station-only map and are
+// migrated on load.
+const subscriptionFileVersion = 2
+
+type persistedSubscriptions struct {
+	Version  int                       `json:"version"`
+	Stations map[string][]Subscription `json:"stations"`
+	SAME     map[string][]Subscription `json:"same"`
+	ZIP      map[string][]Subscription `json:"zip"`
+}
+
+type subscriptionSets struct {
+	stations, same, zip map[string][]Subscription
 }
 
 type SubscriptionManager struct {
 	mu                 sync.RWMutex
-	stationSubscribers map[string][]Subscription  // station code -> list of subscriptions
-	recentMessages     map[string][]RecentMessage // station code -> recent messages (last 5)
-	filePath           string                     // path to persistence file
-	autoSaveChan       chan struct{}              // signal channel for auto-save
-	stopAutoSave       chan struct{}              // signal to stop auto-save goroutine
+	stationSubscribers map[string][]Subscription
+	sameSubscribers    map[string][]Subscription
+	zipSubscribers     map[string][]Subscription
+	recentMessages     map[string][]RecentMessage
+	filePath           string
+	autoSaveChan       chan struct{}
+	stopAutoSave       chan struct{}
 }
 
 func NewSubscriptionManager() *SubscriptionManager {
 	return &SubscriptionManager{
 		stationSubscribers: make(map[string][]Subscription),
+		sameSubscribers:    make(map[string][]Subscription),
+		zipSubscribers:     make(map[string][]Subscription),
 		recentMessages:     make(map[string][]RecentMessage),
 		autoSaveChan:       make(chan struct{}, 1),
 		stopAutoSave:       make(chan struct{}),
 	}
 }
 
-// SetPersistenceFile sets the file path for persistence and starts the auto-save goroutine
 func (sm *SubscriptionManager) SetPersistenceFile(filePath string) {
 	sm.mu.Lock()
 	sm.filePath = filePath
 	sm.mu.Unlock()
 
-	// Start auto-save goroutine
 	go sm.autoSaveLoop()
 
 	log.Info().Str("file", filePath).Msg("Subscription persistence enabled")
 }
 
-// Load reads subscriptions from the persistence file
 func (sm *SubscriptionManager) Load() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sm.filePath == "" {
-		return nil // No persistence configured
 	}
 
 	data, err := os.ReadFile(sm.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info().Str("file", sm.filePath).Msg("No existing subscription file found, starting fresh")
-			return nil // No file yet, that's okay
 		}
 		return fmt.Errorf("failed to read subscriptions file: %w", err)
 	}
 
-	// Try to unmarshal
-	var subscriptions map[string][]Subscription
-	if err := json.Unmarshal(data, &subscriptions); err != nil {
-		// File is corrupted, try to recover by loading backup
+	sets, err := decodeSubscriptions(data)
+	if err != nil {
 		return sm.loadBackup(err)
 	}
-
-	sm.stationSubscribers = subscriptions
-
-	// Count total subscriptions
-	totalSubs := 0
-	for _, subs := range subscriptions {
-		totalSubs += len(subs)
-	}
+	sm.apply(sets)
 
 	log.Info().
 		Str("file", sm.filePath).
-		Int("stations", len(subscriptions)).
-		Int("total_subscriptions", totalSubs).
+		Int("stations", len(sets.stations)).
+		Int("station_subscriptions", countSubscriptions(sets.stations)).
+		Int("same_codes", len(sets.same)).
+		Int("same_subscriptions", countSubscriptions(sets.same)).
+		Int("zips", len(sets.zip)).
+		Int("zip_subscriptions", countSubscriptions(sets.zip)).
 		Msg("Loaded subscriptions from file")
 
 	return nil
 }
 
-// loadBackup attempts to load from a backup file if the main file is corrupted
+func decodeSubscriptions(data []byte) (subscriptionSets, error) {
+	var sets subscriptionSets
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return sets, err
+	}
+
+	if _, versioned := probe["version"]; versioned {
+		var file persistedSubscriptions
+		if err := json.Unmarshal(data, &file); err != nil {
+			return sets, err
+		}
+		sets = subscriptionSets{stations: file.Stations, same: file.SAME, zip: file.ZIP}
+	} else {
+		if err := json.Unmarshal(data, &sets.stations); err != nil {
+			return sets, err
+		}
+	}
+
+	for _, m := range []*map[string][]Subscription{&sets.stations, &sets.same, &sets.zip} {
+		if *m == nil {
+			*m = make(map[string][]Subscription)
+		}
+	}
+	return sets, nil
+}
+
+func (sm *SubscriptionManager) apply(sets subscriptionSets) {
+	sm.stationSubscribers = sets.stations
+	sm.sameSubscribers = sets.same
+	sm.zipSubscribers = sets.zip
+}
+
+func countSubscriptions(m map[string][]Subscription) int {
+	total := 0
+	for _, subs := range m {
+		total += len(subs)
+	}
+	return total
+}
+
 func (sm *SubscriptionManager) loadBackup(originalErr error) error {
 	backupPath := sm.filePath + ".backup"
 	data, err := os.ReadFile(backupPath)
@@ -110,30 +165,29 @@ func (sm *SubscriptionManager) loadBackup(originalErr error) error {
 			Err(originalErr).
 			Str("file", sm.filePath).
 			Msg("Subscription file corrupted and no backup available, starting fresh")
-		return nil // Start fresh if backup also doesn't exist
 	}
 
-	var subscriptions map[string][]Subscription
-	if err := json.Unmarshal(data, &subscriptions); err != nil {
+	sets, err := decodeSubscriptions(data)
+	if err != nil {
 		log.Error().
 			Err(originalErr).
 			Str("file", sm.filePath).
 			Msg("Both subscription file and backup are corrupted, starting fresh")
-		return nil // Start fresh if backup is also corrupted
 	}
+	sm.apply(sets)
 
-	sm.stationSubscribers = subscriptions
 	log.Warn().
 		Err(originalErr).
 		Str("file", sm.filePath).
 		Str("backup_file", backupPath).
-		Int("stations", len(subscriptions)).
+		Int("stations", len(sets.stations)).
+		Int("same_codes", len(sets.same)).
+		Int("zips", len(sets.zip)).
 		Msg("Loaded subscriptions from backup after main file corruption")
 
 	return nil
 }
 
-// Save writes subscriptions to disk atomically
 func (sm *SubscriptionManager) Save() error {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -142,19 +196,22 @@ func (sm *SubscriptionManager) Save() error {
 		return nil // No persistence configured
 	}
 
-	// Marshal the subscriptions
-	data, err := json.MarshalIndent(sm.stationSubscribers, "", "  ")
+	file := persistedSubscriptions{
+		Version:  subscriptionFileVersion,
+		Stations: sm.stationSubscribers,
+		SAME:     sm.sameSubscribers,
+		ZIP:      sm.zipSubscribers,
+	}
+	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal subscriptions: %w", err)
 	}
 
-	// Ensure directory exists
 	dir := filepath.Dir(sm.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Create backup of existing file before overwriting
 	if _, err := os.Stat(sm.filePath); err == nil {
 		backupPath := sm.filePath + ".backup"
 		if err := copyFile(sm.filePath, backupPath); err != nil {
@@ -162,13 +219,11 @@ func (sm *SubscriptionManager) Save() error {
 		}
 	}
 
-	// Atomic write: write to temp file, then rename
 	tmpFile := sm.filePath + ".tmp"
 	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	// Rename is atomic on POSIX systems
 	if err := os.Rename(tmpFile, sm.filePath); err != nil {
 		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
@@ -177,7 +232,6 @@ func (sm *SubscriptionManager) Save() error {
 	return nil
 }
 
-// copyFile creates a copy of a file
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -186,16 +240,13 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0644)
 }
 
-// triggerAutoSave signals the auto-save goroutine to save (non-blocking)
 func (sm *SubscriptionManager) triggerAutoSave() {
 	select {
 	case sm.autoSaveChan <- struct{}{}:
 	default:
-		// Channel full, save already pending
 	}
 }
 
-// autoSaveLoop runs in a goroutine and handles periodic saves
 func (sm *SubscriptionManager) autoSaveLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -206,12 +257,10 @@ func (sm *SubscriptionManager) autoSaveLoop() {
 			log.Info().Msg("Stopping auto-save goroutine")
 			return
 		case <-sm.autoSaveChan:
-			// Immediate save requested
 			if err := sm.Save(); err != nil {
 				log.Error().Err(err).Msg("Failed to auto-save subscriptions")
 			}
 		case <-ticker.C:
-			// Periodic backup save
 			if err := sm.Save(); err != nil {
 				log.Error().Err(err).Msg("Failed to save subscriptions during periodic backup")
 			}
@@ -219,7 +268,6 @@ func (sm *SubscriptionManager) autoSaveLoop() {
 	}
 }
 
-// Close stops the auto-save goroutine and performs a final save
 func (sm *SubscriptionManager) Close() error {
 	close(sm.stopAutoSave)
 	return sm.Save()
@@ -236,36 +284,81 @@ func ValidateStationCode(code string) error {
 	return nil
 }
 
+func normalizeFilters(filters []string) []string {
+	if len(filters) == 0 {
+		return []string{"cap"}
+	}
+	normalized := make([]string, len(filters))
+	for i, f := range filters {
+		normalized[i] = strings.ToLower(f)
+	}
+	return normalized
+}
+
+func upsertSubscription(m map[string][]Subscription, key string, sub Subscription) {
+	subs, _ := removeUserSubscription(m[key], sub.UserID)
+	m[key] = append(subs, sub)
+}
+
+func removeUserSubscription(subs []Subscription, userID string) ([]Subscription, bool) {
+	for i, sub := range subs {
+		if sub.UserID == userID {
+			return append(subs[:i:i], subs[i+1:]...), true
+		}
+	}
+	return subs, false
+}
+
+func dropUserSubscription(m map[string][]Subscription, key, userID string) bool {
+	subs, found := removeUserSubscription(m[key], userID)
+	if !found {
+		return false
+	}
+	if len(subs) == 0 {
+		delete(m, key)
+	} else {
+		m[key] = subs
+	}
+	return true
+}
+
+func dropUserEverywhere(m map[string][]Subscription, userID string) int {
+	count := 0
+	for key := range m {
+		if dropUserSubscription(m, key, userID) {
+			count++
+		}
+	}
+	return count
+}
+
+func userSubscriptions(m map[string][]Subscription, userID string) []UserSubscription {
+	var result []UserSubscription
+	for key, subs := range m {
+		for _, sub := range subs {
+			if sub.UserID == userID {
+				result = append(result, UserSubscription{Code: key, Filters: sub.Filters})
+				break
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Code < result[j].Code })
+	return result
+}
+
+func copySubscriptions(subs []Subscription) []Subscription {
+	result := make([]Subscription, len(subs))
+	copy(result, subs)
+	return result
+}
+
 func (sm *SubscriptionManager) SubscribeToStation(userID, stationCode string, filters []string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	stationCode = strings.ToUpper(stationCode)
-
-	// Default to "cap" if no filters provided
-	if len(filters) == 0 {
-		filters = []string{"cap"}
-	}
-
-	// Normalize filter values to lowercase
-	normalizedFilters := make([]string, len(filters))
-	for i, f := range filters {
-		normalizedFilters[i] = strings.ToLower(f)
-	}
-
-	// Remove existing subscription if present
-	subs := sm.stationSubscribers[stationCode]
-	for i, sub := range subs {
-		if sub.UserID == userID {
-			sm.stationSubscribers[stationCode] = append(subs[:i], subs[i+1:]...)
-			break
-		}
-	}
-
-	// Add new subscription with filters
-	sm.stationSubscribers[stationCode] = append(sm.stationSubscribers[stationCode], Subscription{
+	upsertSubscription(sm.stationSubscribers, strings.ToUpper(stationCode), Subscription{
 		UserID:  userID,
-		Filters: normalizedFilters,
+		Filters: normalizeFilters(filters),
 	})
 
 	sm.triggerAutoSave()
@@ -275,80 +368,160 @@ func (sm *SubscriptionManager) UnsubscribeFromStation(userID, stationCode string
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	stationCode = strings.ToUpper(stationCode)
-
-	subscribers := sm.stationSubscribers[stationCode]
-	for i, sub := range subscribers {
-		if sub.UserID == userID {
-			sm.stationSubscribers[stationCode] = append(subscribers[:i], subscribers[i+1:]...)
-			if len(sm.stationSubscribers[stationCode]) == 0 {
-				delete(sm.stationSubscribers, stationCode)
-			}
-
-			sm.triggerAutoSave()
-			return true
-		}
+	if !dropUserSubscription(sm.stationSubscribers, strings.ToUpper(stationCode), userID) {
+		return false
 	}
-	return false
+	sm.triggerAutoSave()
+	return true
 }
 
 func (sm *SubscriptionManager) GetStationSubscriptions(stationCode string) []Subscription {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	stationCode = strings.ToUpper(stationCode)
-	subscriptions := sm.stationSubscribers[stationCode]
-
-	result := make([]Subscription, len(subscriptions))
-	copy(result, subscriptions)
-	return result
+	return copySubscriptions(sm.stationSubscribers[strings.ToUpper(stationCode)])
 }
 
-func (sm *SubscriptionManager) GetUserStationSubscriptions(userID string) []string {
+func (sm *SubscriptionManager) GetUserStations(userID string) []UserSubscription {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	var stations []string
-	for station, subscriptions := range sm.stationSubscribers {
-		for _, sub := range subscriptions {
-			if sub.UserID == userID {
-				stations = append(stations, station)
-				break
-			}
+	return userSubscriptions(sm.stationSubscribers, userID)
+}
+
+func (sm *SubscriptionManager) SubscribeToSAME(userID string, codes []string, filters []string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	normalized := normalizeFilters(filters)
+	for _, code := range codes {
+		upsertSubscription(sm.sameSubscribers, code, Subscription{
+			UserID:  userID,
+			Filters: append([]string(nil), normalized...),
+		})
+	}
+
+	sm.triggerAutoSave()
+}
+
+func (sm *SubscriptionManager) UnsubscribeFromSAME(userID string, codes []string) []string {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var removed []string
+	for _, code := range codes {
+		if dropUserSubscription(sm.sameSubscribers, code, userID) {
+			removed = append(removed, code)
 		}
 	}
-	return stations
+	if len(removed) > 0 {
+		sm.triggerAutoSave()
+	}
+	return removed
+}
+
+func (sm *SubscriptionManager) UnsubscribeFromAllSAME(userID string) int {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	count := dropUserEverywhere(sm.sameSubscribers, userID)
+	if count > 0 {
+		sm.triggerAutoSave()
+	}
+	return count
+}
+
+func (sm *SubscriptionManager) GetSAMESubscriptions(code string) []Subscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return copySubscriptions(sm.sameSubscribers[code])
+}
+
+func (sm *SubscriptionManager) GetUserSAMESubscriptions(userID string) []UserSubscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return userSubscriptions(sm.sameSubscribers, userID)
+}
+
+func (sm *SubscriptionManager) SubscribeToZIP(userID string, zips []string, filters []string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	normalized := normalizeFilters(filters)
+	for _, zip := range zips {
+		upsertSubscription(sm.zipSubscribers, zip, Subscription{
+			UserID:  userID,
+			Filters: append([]string(nil), normalized...),
+		})
+	}
+
+	sm.triggerAutoSave()
+}
+
+func (sm *SubscriptionManager) UnsubscribeFromZIP(userID string, zips []string) []string {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var removed []string
+	for _, zip := range zips {
+		if dropUserSubscription(sm.zipSubscribers, zip, userID) {
+			removed = append(removed, zip)
+		}
+	}
+	if len(removed) > 0 {
+		sm.triggerAutoSave()
+	}
+	return removed
+}
+
+func (sm *SubscriptionManager) UnsubscribeFromAllZIP(userID string) int {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	count := dropUserEverywhere(sm.zipSubscribers, userID)
+	if count > 0 {
+		sm.triggerAutoSave()
+	}
+	return count
+}
+
+func (sm *SubscriptionManager) GetZIPSubscriptions(zip string) []Subscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return copySubscriptions(sm.zipSubscribers[zip])
+}
+
+func (sm *SubscriptionManager) GetAllZIPSubscriptions() map[string][]Subscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	result := make(map[string][]Subscription, len(sm.zipSubscribers))
+	for zip, subs := range sm.zipSubscribers {
+		result[zip] = copySubscriptions(subs)
+	}
+	return result
+}
+
+func (sm *SubscriptionManager) GetUserZIPSubscriptions(userID string) []UserSubscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	return userSubscriptions(sm.zipSubscribers, userID)
 }
 
 func (sm *SubscriptionManager) UnsubscribeFromAll(userID string) int {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	count := 0
-
-	for station := range sm.stationSubscribers {
-		subscriptions := sm.stationSubscribers[station]
-		newSubs := make([]Subscription, 0, len(subscriptions))
-
-		for _, sub := range subscriptions {
-			if sub.UserID == userID {
-				count++
-			} else {
-				newSubs = append(newSubs, sub)
-			}
-		}
-
-		if len(newSubs) == 0 {
-			delete(sm.stationSubscribers, station)
-		} else if len(newSubs) != len(subscriptions) {
-			sm.stationSubscribers[station] = newSubs
-		}
-	}
-
+	count := dropUserEverywhere(sm.stationSubscribers, userID) +
+		dropUserEverywhere(sm.sameSubscribers, userID) +
+		dropUserEverywhere(sm.zipSubscribers, userID)
 	if count > 0 {
 		sm.triggerAutoSave()
 	}
-
 	return count
 }
 
@@ -379,23 +552,19 @@ func (sm *SubscriptionManager) GetRecentMessages(stationCode string) []RecentMes
 	return result
 }
 
-// ValidateFilters validates that all provided filters are either special filters or known product categories
 func ValidateFilters(filters []string) (invalidFilters []string) {
 	if len(filters) == 0 {
 		return nil
 	}
 
-	// Build set of valid filters
 	validFilters := make(map[string]bool)
 	validFilters["all"] = true
 	validFilters["cap"] = true
 
-	// Add all known product categories (case-insensitive)
 	for _, category := range nwwsio.GetAllCategories() {
 		validFilters[strings.ToLower(category)] = true
 	}
 
-	// Check each provided filter
 	for _, filter := range filters {
 		normalized := strings.ToLower(strings.TrimSpace(filter))
 		if !validFilters[normalized] {
@@ -406,7 +575,6 @@ func ValidateFilters(filters []string) (invalidFilters []string) {
 	return invalidFilters
 }
 
-// GetValidFilters returns a sorted list of all valid filter options
 func GetValidFilters() []string {
 	filters := []string{"all", "cap"}
 	categories := nwwsio.GetAllCategories()
