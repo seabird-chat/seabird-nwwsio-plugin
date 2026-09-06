@@ -1,6 +1,6 @@
 module github.com/seabird-chat/seabird-nwwsio-plugin
 
-go 1.26.2
+go 1.26
 
 require (
 	github.com/mattn/go-isatty v0.0.24
