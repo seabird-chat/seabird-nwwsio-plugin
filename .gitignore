@@ -76,3 +76,6 @@ bin/
 *.backup
 *.tmp
 data/subscriptions.json
+
+# Local capture/research scratch area, never committed
+/local/
