@@ -1,6 +1,7 @@
 package client
 
 import (
+	"reflect"
 	"testing"
 
 	nwwsio "github.com/seabird-chat/seabird-nwwsio-plugin/internal"
@@ -19,11 +20,49 @@ func TestIsTestMessage(t *testing.T) {
 		{"CAP with status Test", nwwsio.NWWSOIMessageXExtension{Ttaaii: "XOUS56", AwipsID: "CAPWBC"}, &nwwsio.Alert{Status: "Test"}, true},
 		{"CAP with status Actual", nwwsio.NWWSOIMessageXExtension{Ttaaii: "XOUS56", AwipsID: "CAPEKA"}, &nwwsio.Alert{Status: "Actual"}, false},
 		{"tornado warning", nwwsio.NWWSOIMessageXExtension{Ttaaii: "WFUS52", AwipsID: "TORJAX"}, nil, false},
+		{"KNCF communications test with empty AWIPS ID", nwwsio.NWWSOIMessageXExtension{Ttaaii: "WOUS99", Cccc: "KNCF"}, nil, true},
 	}
 	for _, c := range cases {
 		if got := isTestMessage(&c.x, c.cap); got != c.want {
 			t.Errorf("%s: isTestMessage = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestSequenceTrackerToleratesReorderingAndDuplicates(t *testing.T) {
+	tr := newSequenceTracker(1)
+	for _, seq := range []int{2, 4, 3, 5, 5, 7, 8, 6} {
+		if lost := tr.observe(seq); len(lost) != 0 {
+			t.Errorf("observe(%d) reported lost %v, want none", seq, lost)
+		}
+	}
+}
+
+func TestSequenceTrackerFollowsANumberingRestart(t *testing.T) {
+	tr := newSequenceTracker(10480)
+	for _, seq := range []int{10481, 10482, 10483, 1, 2, 3, 5} {
+		if lost := tr.observe(seq); len(lost) != 0 {
+			t.Errorf("observe(%d) reported lost %v, want none", seq, lost)
+		}
+	}
+	var lost []int
+	for seq := 6; seq <= 4+sequencePatience+1; seq++ {
+		lost = append(lost, tr.observe(seq)...)
+	}
+	if want := []int{4}; !reflect.DeepEqual(lost, want) {
+		t.Errorf("lost after restart = %v, want %v", lost, want)
+	}
+}
+
+func TestSequenceTrackerReportsLostNumberOncePastPatience(t *testing.T) {
+	tr := newSequenceTracker(1)
+	tr.observe(2)
+	var lost []int
+	for seq := 4; seq <= 3+sequencePatience+1; seq++ {
+		lost = append(lost, tr.observe(seq)...)
+	}
+	if want := []int{3}; !reflect.DeepEqual(lost, want) {
+		t.Errorf("lost = %v, want %v", lost, want)
 	}
 }
 
@@ -46,7 +85,7 @@ func TestHandleMessageDropsTestTrafficWhenFiltering(t *testing.T) {
 	for _, filtering := range []bool{true, false} {
 		c := &SeabirdClient{
 			subscriptions:      NewSubscriptionManager(),
-			lastSequence:       make(map[string]int),
+			sequences:          make(map[string]*sequenceTracker),
 			filterTestMessages: filtering,
 		}
 		handleMessage(nwwsStanza(keepalive), c)

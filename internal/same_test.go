@@ -36,6 +36,16 @@ func TestParseUGC(t *testing.T) {
 			"THIS IS A TEST MESSAGE FROM ILM\nCALL 555-0100-200000-\n",
 			nil,
 		},
+		{
+			"roundup block whose purge time lacks the trailing dash",
+			"ASUS41 KBGM 062100\nRWRNY\nNYZ009-015>016-062200\n...Central New York...\n",
+			[]string{"NYZ009", "NYZ015", "NYZ016"},
+		},
+		{
+			"wrapped block with the blank line NWWS-OI puts between every line",
+			"\n\nWWUS53 KEAX 062144\n\nWCNEAX\n\nKSC005-043-MOC003-005-\n\n075-081-070300-\n\n/O.NEW.KEAX.SV.A.0661.260906T2144Z-260907T0300Z/\n\n",
+			[]string{"KSC005", "KSC043", "MOC003", "MOC005", "MOC075", "MOC081"},
+		},
 	}
 	for _, c := range cases {
 		if got := ParseUGC(c.text); !reflect.DeepEqual(got, c.want) {
@@ -50,10 +60,13 @@ func TestUGCToSAME(t *testing.T) {
 		want []string
 	}{
 		{"FLC031", []string{"012031"}},
-		{"TNZ088", []string{"047157"}},           // zone -> Shelby County
-		{"NMZ201", []string{"035031", "035045"}}, // zone spanning two counties
-		{"PZZ455", []string{"057455"}},           // Pacific marine zone
-		{"LSZ240", []string{"091240"}},           // Lake Superior marine zone
+		{"TNZ088", []string{"047157"}},                                         // zone -> Shelby County
+		{"NMZ201", []string{"035031", "035045"}},                               // zone spanning two counties
+		{"PZZ455", []string{"057455"}},                                         // Pacific marine zone
+		{"LSZ240", []string{"091240"}},                                         // Lake Superior marine zone
+		{"ARZ119", []string{"005033"}},                                         // zone renumbered in the April 2026 correlation file
+		{"CAZ401", []string{"006015"}},                                         // fire weather zone, absent from the public correlation
+		{"MTZ123", []string{"030009", "030031", "030057", "030067", "030097"}}, // fire weather zone spanning five counties
 		{"ZZC001", nil},
 	}
 	for _, c := range cases {

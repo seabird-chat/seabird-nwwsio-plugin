@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,19 +73,64 @@ func handleMessage(p stanza.Packet, client *SeabirdClient) {
 	deliverToGeoSubscribers(client, &x, info, alertMsg, productSAMECodes(info, x.Text))
 }
 
+// Sequence numbers arrive out of order by a few positions inside bursts, so a
+// number only counts as lost once the stream is well past it. The numbering
+// restarts from 1 at 00Z, which shows up as a jump far backwards.
+const (
+	sequencePatience = 50
+	sequenceRestart  = 1000
+)
+
+type sequenceTracker struct {
+	next    int
+	pending map[int]bool
+}
+
+func newSequenceTracker(first int) *sequenceTracker {
+	return &sequenceTracker{next: first + 1, pending: make(map[int]bool)}
+}
+
+// observe records one sequence number and returns the numbers now given up as lost.
+func (t *sequenceTracker) observe(seq int) []int {
+	switch {
+	case seq >= t.next:
+		for n := t.next; n < seq; n++ {
+			t.pending[n] = true
+		}
+		t.next = seq + 1
+	case t.next-seq > sequenceRestart:
+		t.next = seq + 1
+		t.pending = make(map[int]bool)
+	default:
+		delete(t.pending, seq)
+	}
+	var lost []int
+	for n := range t.pending {
+		if t.next-n > sequencePatience {
+			lost = append(lost, n)
+			delete(t.pending, n)
+		}
+	}
+	sort.Ints(lost)
+	return lost
+}
+
 func (c *SeabirdClient) checkSequenceGap(processID string, sequenceID int) {
 	c.sequenceMu.Lock()
 	defer c.sequenceMu.Unlock()
 
-	if lastSeq, seen := c.lastSequence[processID]; seen && sequenceID != lastSeq+1 {
+	tracker, seen := c.sequences[processID]
+	if !seen {
+		c.sequences[processID] = newSequenceTracker(sequenceID)
+		return
+	}
+	if lost := tracker.observe(sequenceID); len(lost) > 0 {
 		log.Warn().
 			Str("process_id", processID).
-			Int("expected_seq", lastSeq+1).
-			Int("received_seq", sequenceID).
-			Int("missed_count", sequenceID-lastSeq-1).
+			Ints("lost_seq", lost).
+			Int("missed_count", len(lost)).
 			Msg("Detected missed messages - sequence gap")
 	}
-	c.lastSequence[processID] = sequenceID
 }
 
 func parseProductInfo(x *nwwsio.NWWSOIMessageXExtension) (*productInfo, error) {
@@ -122,9 +168,13 @@ func isLikelyCAP(productID *nwwsio.WMOProductID, text string) bool {
 }
 
 // isTestMessage matches the NTXX98/99 "THIS IS A TEST MESSAGE" keepalives
-// every office sends hourly, TST products, and CAP alerts with a test status.
+// every office sends hourly, the once-a-minute WOUS99 KNCF AWIPS
+// communications test, TST products, and CAP alerts with a test status.
 func isTestMessage(x *nwwsio.NWWSOIMessageXExtension, capAlert *nwwsio.Alert) bool {
 	if strings.HasPrefix(x.Ttaaii, "NTXX") || strings.HasPrefix(strings.TrimSpace(x.AwipsID), "TST") {
+		return true
+	}
+	if x.Cccc == "KNCF" && x.Ttaaii == "WOUS99" {
 		return true
 	}
 	if capAlert != nil {
@@ -156,6 +206,7 @@ func logProductReceipt(x *nwwsio.NWWSOIMessageXExtension, info *productInfo) {
 		return
 	}
 	event.
+		Str("cap_msgtype", info.capAlert.MsgType).
 		Str("cap_event", capInfo.Event).
 		Str("cap_severity", capInfo.Severity).
 		Str("cap_urgency", capInfo.Urgency).
@@ -172,7 +223,7 @@ func logProductReceipt(x *nwwsio.NWWSOIMessageXExtension, info *productInfo) {
 func buildDisplayName(info *productInfo) string {
 	if info.capAlert != nil {
 		if capInfo := info.capAlert.GetPrimaryInfo(); capInfo != nil && capInfo.Event != "" {
-			return fmt.Sprintf("%s [%s/%s]", capInfo.Event, capInfo.Severity, capInfo.Urgency)
+			return fmt.Sprintf("%s [%s/%s]", capEventLabel(info.capAlert, capInfo), capInfo.Severity, capInfo.Urgency)
 		}
 	}
 	if info.productCategory != "Unknown" {
@@ -188,6 +239,17 @@ func formatAlertMessage(x *nwwsio.NWWSOIMessageXExtension, info *productInfo) st
 	return formatRegularProduct(x, info.productName)
 }
 
+// capEventLabel names the alert and, for updates and cancellations, says so:
+// their info block otherwise reads like a fresh warning.
+func capEventLabel(capAlert *nwwsio.Alert, capInfo *nwwsio.Info) string {
+	switch capAlert.MsgType {
+	case "", "Alert":
+		return capInfo.Event
+	default:
+		return fmt.Sprintf("%s (%s)", capInfo.Event, capAlert.MsgType)
+	}
+}
+
 func formatCAPAlert(x *nwwsio.NWWSOIMessageXExtension, capAlert *nwwsio.Alert) string {
 	capInfo := capAlert.GetPrimaryInfo()
 
@@ -195,7 +257,7 @@ func formatCAPAlert(x *nwwsio.NWWSOIMessageXExtension, capAlert *nwwsio.Alert) s
 		"[%s] %s\n"+
 			"Severity: %s | Urgency: %s | Certainty: %s\n"+
 			"Product: %s | Issued: %s\n",
-		x.Cccc, capInfo.Event, capInfo.Severity, capInfo.Urgency, capInfo.Certainty, x.AwipsID, x.Issue,
+		x.Cccc, capEventLabel(capAlert, capInfo), capInfo.Severity, capInfo.Urgency, capInfo.Certainty, x.AwipsID, x.Issue,
 	)
 	if capInfo.Headline != "" {
 		msg += fmt.Sprintf("\n%s\n", capInfo.Headline)
@@ -219,7 +281,7 @@ func formatRegularProduct(x *nwwsio.NWWSOIMessageXExtension, productName string)
 		"[%s] %s\n"+
 			"Product: %s | Issued: %s\n\n"+
 			"%s",
-		x.Cccc, productName, x.AwipsID, x.Issue, truncateText(x.Text, MaxRegularProductLen),
+		x.Cccc, productName, x.AwipsID, x.Issue, truncateText(nwwsio.ProductBody(x.Text), MaxRegularProductLen),
 	)
 }
 

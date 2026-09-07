@@ -15,15 +15,27 @@ import (
 // state" code for the ocean basin or lake instead of a state.
 //
 // Data sources:
-//   data/same_codes.txt   https://www.weather.gov/source/nwr/SameCode.txt, verbatim
-//   data/zone_county.txt  https://www.weather.gov/gis/ZoneCounty (bp18mr25.dbx),
-//                         reduced to STATE|ZONE|FIPS
+//   data/same_codes.txt        https://www.weather.gov/source/nwr/SameCode.txt, verbatim
+//   data/zone_county.txt       https://www.weather.gov/gis/ZoneCounty (bp16ap26.dbx),
+//                              reduced to STATE|ZONE|FIPS, plus the bp18mr25.dbx rows
+//                              for the 56 zone ids retired since: roundups and tabular
+//                              forecasts kept using them months after the change.
+//   data/fire_zone_county.txt  NWS publishes no correlation for fire weather zones,
+//                              so this is fz16ap26.zip (https://www.weather.gov/gis/FireZones)
+//                              intersected with c_16ap26.zip (https://www.weather.gov/gis/Counties);
+//                              a county is kept when the overlap is at least 2% of the
+//                              smaller of the two areas. Same STATE|ZONE|FIPS layout.
+//                              Checked against bp16ap26: 2992 of the 3016 zone ids present
+//                              in both files get identical county sets.
 
 //go:embed data/same_codes.txt
 var sameCodesData string
 
 //go:embed data/zone_county.txt
 var zoneCountyData string
+
+//go:embed data/fire_zone_county.txt
+var fireZoneCountyData string
 
 // Marine zone UGC prefix to SAME "pseudo state", https://www.weather.gov/marine/wxradio
 var marinePseudoState = map[string]string{
@@ -49,6 +61,7 @@ type sameTables struct {
 	stateFIPS  map[string]string   // "FL" -> "12"
 	stateCodes map[string][]string // "FL" -> every county SAME code in the state
 	zoneCodes  map[string][]string // "TNZ088" -> SAME codes of the counties in the zone
+	fireCodes  map[string][]string // same, for fire weather zones
 }
 
 var (
@@ -58,17 +71,18 @@ var (
 
 func loadTables() *sameTables {
 	tablesOnce.Do(func() {
-		tables = parseTables(sameCodesData, zoneCountyData)
+		tables = parseTables(sameCodesData, zoneCountyData, fireZoneCountyData)
 	})
 	return tables
 }
 
-func parseTables(sameCodes, zoneCounty string) *sameTables {
+func parseTables(sameCodes, zoneCounty, fireZoneCounty string) *sameTables {
 	t := &sameTables{
 		countyName: make(map[string]string),
 		stateFIPS:  make(map[string]string),
 		stateCodes: make(map[string][]string),
-		zoneCodes:  make(map[string][]string),
+		zoneCodes:  parseZoneCounties(zoneCounty),
+		fireCodes:  parseZoneCounties(fireZoneCounty),
 	}
 	for _, line := range strings.Split(sameCodes, "\n") {
 		parts := strings.Split(strings.TrimSpace(line), ",")
@@ -80,21 +94,27 @@ func parseTables(sameCodes, zoneCounty string) *sameTables {
 		t.stateFIPS[state] = code[1:3]
 		t.stateCodes[state] = append(t.stateCodes[state], code)
 	}
-	for _, line := range strings.Split(zoneCounty, "\n") {
+	for k, v := range t.stateCodes {
+		t.stateCodes[k] = sortedUnique(v)
+	}
+	return t
+}
+
+// parseZoneCounties reads STATE|ZONE|FIPS rows into "SSZnnn" -> SAME codes.
+func parseZoneCounties(data string) map[string][]string {
+	codes := make(map[string][]string)
+	for _, line := range strings.Split(data, "\n") {
 		parts := strings.Split(strings.TrimSpace(line), "|")
 		if len(parts) != 3 || len(parts[2]) != 5 {
 			continue
 		}
 		key := parts[0] + "Z" + parts[1]
-		t.zoneCodes[key] = append(t.zoneCodes[key], "0"+parts[2])
+		codes[key] = append(codes[key], "0"+parts[2])
 	}
-	for k, v := range t.stateCodes {
-		t.stateCodes[k] = sortedUnique(v)
+	for k, v := range codes {
+		codes[k] = sortedUnique(v)
 	}
-	for k, v := range t.zoneCodes {
-		t.zoneCodes[k] = sortedUnique(v)
-	}
-	return t
+	return codes
 }
 
 var sameCodeRe = regexp.MustCompile(`^\d{6}$`)
@@ -120,7 +140,9 @@ func StateFIPS(abbr string) (string, bool) {
 
 // UGCToSAME maps one UGC (SSCnnn or SSZnnn) to the SAME codes it covers: a
 // county to one code, a land zone to every county in it, a marine zone to
-// its marine code, and ALL/000 to the whole state.
+// its marine code, and ALL/000 to the whole state. Public and fire weather
+// zones share the SSZnnn space; the public correlation wins when both list
+// the same id.
 func UGCToSAME(ugc string) []string {
 	if len(ugc) != 6 {
 		return nil
@@ -141,15 +163,19 @@ func UGCToSAME(ugc string) []string {
 		if pseudo, ok := marinePseudoState[state]; ok {
 			return []string{"0" + pseudo + nnn}
 		}
-		return append([]string(nil), t.zoneCodes[ugc]...)
+		if codes, ok := t.zoneCodes[ugc]; ok {
+			return append([]string(nil), codes...)
+		}
+		return append([]string(nil), t.fireCodes[ugc]...)
 	}
 	return nil
 }
 
 var (
-	ugcStartRe  = regexp.MustCompile(`^[A-Z]{2}[CZ](\d{3}|ALL)[->]`)
-	ugcContRe   = regexp.MustCompile(`^[A-Z0-9>-]+-$`)
-	ugcEndRe    = regexp.MustCompile(`\d{6}-$`)
+	ugcStartRe = regexp.MustCompile(`^[A-Z]{2}[CZ](\d{3}|ALL)[->]`)
+	ugcContRe  = regexp.MustCompile(`^([A-Z0-9>-]+-|\d{6})$`)
+	// Roundups (RWR) omit the dash after the purge time.
+	ugcEndRe    = regexp.MustCompile(`\d{6}-?$`)
 	ugcExpiryRe = regexp.MustCompile(`^\d{6}$`)
 	ugcGroupRe  = regexp.MustCompile(`^([A-Z]{2}[CZ])(.*)$`)
 )
@@ -168,6 +194,11 @@ func ParseUGC(text string) []string {
 		block := line
 		for !ugcEndRe.MatchString(block) && i+1 < len(lines) {
 			next := strings.TrimSpace(lines[i+1])
+			if next == "" {
+				// NWWS-OI delivers products with a blank line after every line.
+				i++
+				continue
+			}
 			if !ugcContRe.MatchString(next) {
 				break
 			}

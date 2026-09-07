@@ -32,7 +32,11 @@ func handlePresence(p stanza.Packet, monitor *mucMonitor) {
 	}
 	log.Debug().Str("from", presence.From).Str("type", string(presence.Type)).Msg("Received presence stanza")
 
-	switch action, reason := classifyPresence(presence, monitor.mucJID); action {
+	room := monitor.room()
+	if room == nil {
+		return
+	}
+	switch action, reason := classifyPresence(presence, room); action {
 	case presenceJoined:
 		monitor.noteJoined()
 	case presenceRejoin:
@@ -129,13 +133,14 @@ func watchdogDecision(now, lastMessage, lastRejoin time.Time, silence, grace tim
 }
 
 // mucMonitor keeps us in the room: it rejoins with backoff when the room says
-// we left, and its watchdog treats prolonged silence as lost membership.
+// we left, and its watchdog treats prolonged silence as lost membership and
+// ends the session so a fresh one is built.
 type mucMonitor struct {
-	mucJID     *stanza.Jid
-	disconnect func()
+	endSession func()
 
 	mu             sync.Mutex
 	sender         xmpp.Sender
+	mucJID         *stanza.Jid // our occupant JID in the current session
 	lastMessage    time.Time
 	lastRejoin     time.Time
 	rejoinAttempts int
@@ -143,17 +148,24 @@ type mucMonitor struct {
 	stopped        bool
 }
 
-func newMUCMonitor(mucJID *stanza.Jid) *mucMonitor {
-	return &mucMonitor{mucJID: mucJID}
+func newMUCMonitor() *mucMonitor {
+	return &mucMonitor{}
 }
 
-func (m *mucMonitor) connected(s xmpp.Sender) {
+func (m *mucMonitor) connected(s xmpp.Sender, room *stanza.Jid) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sender = s
+	m.mucJID = room
 	m.lastMessage = time.Now()
 	m.lastRejoin = time.Time{}
 	m.rejoinAttempts = 0
+}
+
+func (m *mucMonitor) room() *stanza.Jid {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mucJID
 }
 
 func (m *mucMonitor) noteMessage() {
@@ -188,7 +200,7 @@ func (m *mucMonitor) requestRejoin(reason string) {
 	m.rejoinPending = true
 	attempt := m.rejoinAttempts
 	m.rejoinAttempts++
-	sender := m.sender
+	sender, room := m.sender, m.mucJID
 	m.mu.Unlock()
 
 	delay := reconnectDelay(attempt)
@@ -204,12 +216,12 @@ func (m *mucMonitor) requestRejoin(reason string) {
 		if stopped {
 			return
 		}
-		if err := joinMUC(sender, m.mucJID); err != nil {
+		if err := joinMUC(sender, room); err != nil {
 			log.Error().Err(err).Msg("Failed to send MUC rejoin")
 			m.requestRejoin("rejoin send failed")
 			return
 		}
-		log.Info().Str("muc_jid", m.mucJID.Full()).Msg("Sent MUC rejoin")
+		log.Info().Str("muc_jid", room.Full()).Msg("Sent MUC rejoin")
 	}()
 }
 
@@ -233,12 +245,12 @@ func (m *mucMonitor) watchdog(ctx context.Context) {
 			case watchdogRejoin:
 				m.requestRejoin(fmt.Sprintf("no room traffic for %s", silentFor))
 			case watchdogDisconnect:
-				log.Error().Dur("silent_for", silentFor).Msg("Room still silent after rejoin, forcing NWWS-IO reconnect")
+				log.Error().Dur("silent_for", silentFor).Msg("Room still silent after rejoin, rebuilding NWWS-IO session")
 				m.mu.Lock()
 				m.lastMessage = now
 				m.mu.Unlock()
-				if m.disconnect != nil {
-					m.disconnect()
+				if m.endSession != nil {
+					m.endSession()
 				}
 			}
 		}

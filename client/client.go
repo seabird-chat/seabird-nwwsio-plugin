@@ -6,14 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/seabird-chat/seabird-go"
 	"github.com/seabird-chat/seabird-go/pb"
 	"golang.org/x/sync/errgroup"
-	"gosrc.io/xmpp"
 	"gosrc.io/xmpp/stanza"
 )
 
@@ -34,17 +32,14 @@ type Config struct {
 
 type SeabirdClient struct {
 	*seabird.Client
-	NWWSClient         *xmpp.StreamManager
-	nwwsXMPPClient     *xmpp.Client
-	mucJID             *stanza.Jid
+	nwws               *nwwsSessions
 	muc                *mucMonitor
 	subscriptions      *SubscriptionManager
 	filterTestMessages bool
-	nwwsRunning        atomic.Bool
 	cancelFunc         context.CancelFunc
 
-	sequenceMu   sync.Mutex
-	lastSequence map[string]int // NWWS ingest process ID -> last sequence number seen
+	sequenceMu sync.Mutex
+	sequences  map[string]*sequenceTracker // by NWWS ingest process ID
 }
 
 func NewSeabirdClient(cfg Config) (*SeabirdClient, error) {
@@ -55,19 +50,13 @@ func NewSeabirdClient(cfg Config) (*SeabirdClient, error) {
 	}
 	log.Info().Str("url", cfg.SeabirdCoreURL).Msg("Successfully connected to seabird-core")
 
-	instanceID := generateInstanceID()
 	client := &SeabirdClient{
-		Client: seabirdClient,
-		mucJID: &stanza.Jid{
-			Node:     "nwws",
-			Domain:   "conference.nwws-oi.weather.gov",
-			Resource: fmt.Sprintf("%s-%s", cfg.NWWSIOUsername, instanceID),
-		},
+		Client:             seabirdClient,
 		subscriptions:      NewSubscriptionManager(),
-		lastSequence:       make(map[string]int),
+		sequences:          make(map[string]*sequenceTracker),
 		filterTestMessages: cfg.FilterTestMessages,
 	}
-	log.Info().Str("instance_id", instanceID).Bool("filter_test_messages", cfg.FilterTestMessages).Msg("Client configured")
+	log.Info().Bool("filter_test_messages", cfg.FilterTestMessages).Msg("Client configured")
 
 	if cfg.SubscriptionFile != "" {
 		client.subscriptions.SetPersistenceFile(cfg.SubscriptionFile)
@@ -78,15 +67,22 @@ func NewSeabirdClient(cfg Config) (*SeabirdClient, error) {
 		log.Warn().Msg("No subscription file configured - subscriptions will not persist across restarts")
 	}
 
+	monitor := newMUCMonitor()
+	router := newNWWSRouter(client, monitor)
+	client.muc = monitor
+	client.nwws = &nwwsSessions{
+		build: func() (*nwwsSession, error) {
+			return newNWWSSession(cfg.NWWSIOUsername, cfg.NWWSIOPassword, router, monitor)
+		},
+		wait: waitFor,
+	}
+	monitor.endSession = client.nwws.stop
+
 	log.Info().Str("username", cfg.NWWSIOUsername).Msg("Connecting to NWWS-IO")
-	streamManager, xmppClient, err := newNWWSClient(cfg.NWWSIOUsername, cfg.NWWSIOPassword, instanceID, client)
-	if err != nil {
+	if err := client.nwws.prepare(); err != nil {
 		return nil, err
 	}
 	log.Info().Str("username", cfg.NWWSIOUsername).Msg("Successfully connected to NWWS-IO")
-
-	client.NWWSClient = streamManager
-	client.nwwsXMPPClient = xmppClient
 	return client, nil
 }
 
@@ -99,11 +95,8 @@ func (c *SeabirdClient) Run() error {
 	g, gctx := errgroup.WithContext(ctx)
 
 	log.Info().Msg("Starting NWWS-IO client")
-	c.nwwsRunning.Store(true)
 	g.Go(func() error {
-		err := c.NWWSClient.Run()
-		c.nwwsRunning.Store(false)
-		return err
+		return c.nwws.run(gctx)
 	})
 
 	log.Info().Msg("Starting seabird command handler")
@@ -116,11 +109,11 @@ func (c *SeabirdClient) Run() error {
 		return nil
 	})
 
-	// If anything above fails, stop the NWWS client so Run returns and the
+	// If anything above fails, end the NWWS session so run returns and the
 	// process exits instead of running half-alive.
 	g.Go(func() error {
 		<-gctx.Done()
-		c.stopNWWS()
+		c.nwws.stop()
 		return nil
 	})
 
@@ -135,12 +128,14 @@ func (c *SeabirdClient) Shutdown() error {
 		c.muc.stop()
 	}
 
-	if c.nwwsXMPPClient != nil && c.mucJID != nil {
-		err := c.nwwsXMPPClient.Send(stanza.Presence{
-			Attrs: stanza.Attrs{To: c.mucJID.Full(), Type: stanza.PresenceTypeUnavailable},
-		})
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to send presence unavailable")
+	if c.nwws != nil {
+		if s := c.nwws.currentSession(); s != nil {
+			err := s.client.Send(stanza.Presence{
+				Attrs: stanza.Attrs{To: s.mucJID.Full(), Type: stanza.PresenceTypeUnavailable},
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to send presence unavailable")
+			}
 		}
 	}
 
@@ -154,20 +149,14 @@ func (c *SeabirdClient) Shutdown() error {
 		}
 	}
 
-	c.stopNWWS()
+	if c.nwws != nil {
+		c.nwws.stop()
+	}
 
 	if c.Client != nil {
 		return c.Client.Close()
 	}
 	return nil
-}
-
-// stopNWWS runs at most once and only while the stream manager is running;
-// Stop on a manager whose Run already returned panics on its WaitGroup.
-func (c *SeabirdClient) stopNWWS() {
-	if c.NWWSClient != nil && c.nwwsRunning.CompareAndSwap(true, false) {
-		c.NWWSClient.Stop()
-	}
 }
 
 func (c *SeabirdClient) SendMessage(channelID, text string) {
