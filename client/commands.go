@@ -50,7 +50,7 @@ func (c *SeabirdClient) handleCommandEvents(ctx context.Context) error {
 			return seabirdEventSource{stream}, nil
 		},
 		handle: func(event *pb.Event) {
-			if cmd := event.GetCommand(); cmd != nil {
+			if cmd := event.GetCommand(); cmd != nil && cmd.Command == "noaa" {
 				c.handleNoaaCommand(cmd)
 			}
 		},
