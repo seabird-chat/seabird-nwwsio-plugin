@@ -133,14 +133,13 @@ func watchdogDecision(now, lastMessage, lastRejoin time.Time, silence, grace tim
 }
 
 // mucMonitor keeps us in the room: it rejoins with backoff when the room says
-// we left, and its watchdog treats prolonged silence as lost membership and
-// ends the session so a fresh one is built.
+// we left, and its watchdog treats prolonged silence as lost membership.
 type mucMonitor struct {
 	endSession func()
 
 	mu             sync.Mutex
 	sender         xmpp.Sender
-	mucJID         *stanza.Jid // our occupant JID in the current session
+	mucJID         *stanza.Jid
 	lastMessage    time.Time
 	lastRejoin     time.Time
 	rejoinAttempts int

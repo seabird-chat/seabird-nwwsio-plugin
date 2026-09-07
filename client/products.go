@@ -73,11 +73,8 @@ func handleMessage(p stanza.Packet, client *SeabirdClient) {
 	deliverToGeoSubscribers(client, &x, info, alertMsg, productSAMECodes(info, x.Text))
 }
 
-// Sequence numbers arrive out of order by a few positions inside bursts, so a
-// number only counts as lost once the stream is well past it. A jump of
-// sequenceRestart or more in either direction is a resync, not a gap: the
-// numbering restarts from 1 at 00Z, and after a long outage the individual
-// numbers are not worth tracking.
+// Sequence numbers arrive out of order by a few positions inside bursts, and
+// the numbering restarts from 1 at 00Z.
 const (
 	sequencePatience = 50
 	sequenceRestart  = 1000
@@ -92,9 +89,6 @@ func newSequenceTracker(first int) *sequenceTracker {
 	return &sequenceTracker{next: first + 1, pending: make(map[int]bool)}
 }
 
-// observe records one sequence number and returns the numbers now given up
-// as lost. A run of consecutive missing numbers is one outage and is given up
-// as a whole.
 func (t *sequenceTracker) observe(seq int) []int {
 	switch {
 	case seq-t.next >= sequenceRestart || t.next-seq >= sequenceRestart:
@@ -253,8 +247,6 @@ func formatAlertMessage(x *nwwsio.NWWSOIMessageXExtension, info *productInfo) st
 	return formatRegularProduct(x, info.productName)
 }
 
-// capEventLabel names the alert and, for updates and cancellations, says so:
-// their info block otherwise reads like a fresh warning.
 func capEventLabel(capAlert *nwwsio.Alert, capInfo *nwwsio.Info) string {
 	switch capAlert.MsgType {
 	case "", "Alert":

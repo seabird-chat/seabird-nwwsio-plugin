@@ -11,10 +11,8 @@ var (
 	awipsLineRe    = regexp.MustCompile(`^[A-Z0-9]{4,6}$`)
 )
 
-// ProductBody returns the product text as the office wrote it. NWWS-OI puts a
-// blank line after every line; when the whole text is spaced that way the
-// blanks are removed. The transmission envelope on top (three-digit sequence
-// number, WMO heading, AWIPS ID) is dropped.
+// NWWS-OI puts a blank line after every line and a three-line transmission
+// envelope (sequence number, WMO heading, AWIPS ID) on top.
 func ProductBody(text string) string {
 	lines := strings.Split(text, "\n")
 	for i := range lines {

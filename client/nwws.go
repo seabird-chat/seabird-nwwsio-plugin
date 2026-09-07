@@ -21,14 +21,9 @@ const (
 	NWWSDomain        = "nwws-oi.weather.gov"
 	NWWSResource      = "nwws"
 	ConnectionTimeout = 3 * time.Second
-	// Consecutive sessions that fail to connect before giving up so the
-	// supervisor restarts the process.
-	maxNWWSFailures = 5
+	maxNWWSFailures   = 5
 )
 
-// nwwsSession is one connection to NWWS-IO with its own XMPP resource and
-// room nick, so a previous session the server still considers alive cannot
-// collide with it.
 type nwwsSession struct {
 	manager *xmpp.StreamManager
 	client  xmpp.StreamClient
@@ -48,10 +43,8 @@ func (s *nwwsSession) run() error {
 	return err
 }
 
-// stop ends the session at most once and only while it runs; Stop on a
-// manager whose Run already returned panics on its WaitGroup. The stop itself
-// runs in the background: closing a dead connection blocks on an unanswered
-// stream-close write for minutes, and nothing should wait for that.
+// Stop on a manager whose Run already returned panics on its WaitGroup, and
+// closing a dead connection blocks for minutes.
 func (s *nwwsSession) stop() {
 	if s.running.CompareAndSwap(true, false) {
 		close(s.ended)
@@ -59,10 +52,8 @@ func (s *nwwsSession) stop() {
 	}
 }
 
-// nwwsSessions keeps one session alive at a time and builds the next one from
-// scratch when the current one ends. The library's in-place resume was seen
-// to leave a session that looks connected but never receives anything, so
-// nothing here resumes.
+// The library's in-place resume can leave a session that looks connected but
+// receives nothing, so sessions are only ever rebuilt.
 type nwwsSessions struct {
 	build func() (*nwwsSession, error)
 	wait  func(ctx context.Context, d time.Duration) bool
@@ -83,8 +74,6 @@ func (n *nwwsSessions) setCurrent(s *nwwsSession) {
 	n.current = s
 }
 
-// prepare builds the first session up front so an unreachable service fails
-// startup instead of retrying in the background.
 func (n *nwwsSessions) prepare() error {
 	s, err := n.build()
 	if err != nil {
@@ -94,15 +83,12 @@ func (n *nwwsSessions) prepare() error {
 	return nil
 }
 
-// stop ends the current session; run then rebuilds unless its context ended.
 func (n *nwwsSessions) stop() {
 	if s := n.currentSession(); s != nil {
 		s.stop()
 	}
 }
 
-// run blocks until ctx ends (returning nil) or maxNWWSFailures sessions in a
-// row failed to connect.
 func (n *nwwsSessions) run(ctx context.Context) error {
 	failures := 0
 	for ctx.Err() == nil {
@@ -156,8 +142,6 @@ func (n *nwwsSessions) run(ctx context.Context) error {
 	return nil
 }
 
-// newNWWSSession finds a reachable site and builds the client, stream manager
-// and room JID for one session.
 func newNWWSSession(username, password string, router *xmpp.Router, monitor *mucMonitor) (*nwwsSession, error) {
 	instanceID := generateInstanceID()
 	config, err := findReachableNWWSSite(username, password, instanceID)

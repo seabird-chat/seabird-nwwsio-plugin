@@ -100,7 +100,6 @@ func parseTables(sameCodes, zoneCounty, fireZoneCounty string) *sameTables {
 	return t
 }
 
-// parseZoneCounties reads STATE|ZONE|FIPS rows into "SSZnnn" -> SAME codes.
 func parseZoneCounties(data string) map[string][]string {
 	codes := make(map[string][]string)
 	for _, line := range strings.Split(data, "\n") {
