@@ -34,6 +34,11 @@ type nwwsSession struct {
 	client  xmpp.StreamClient
 	mucJID  *stanza.Jid
 	running atomic.Bool
+	ended   chan struct{} // closed by stop
+}
+
+func newSession(manager *xmpp.StreamManager, client xmpp.StreamClient, mucJID *stanza.Jid) *nwwsSession {
+	return &nwwsSession{manager: manager, client: client, mucJID: mucJID, ended: make(chan struct{})}
 }
 
 func (s *nwwsSession) run() error {
@@ -44,10 +49,13 @@ func (s *nwwsSession) run() error {
 }
 
 // stop ends the session at most once and only while it runs; Stop on a
-// manager whose Run already returned panics on its WaitGroup.
+// manager whose Run already returned panics on its WaitGroup. The stop itself
+// runs in the background: closing a dead connection blocks on an unanswered
+// stream-close write for minutes, and nothing should wait for that.
 func (s *nwwsSession) stop() {
 	if s.running.CompareAndSwap(true, false) {
-		s.manager.Stop()
+		close(s.ended)
+		go s.manager.Stop()
 	}
 }
 
@@ -117,7 +125,16 @@ func (n *nwwsSessions) run(ctx context.Context) error {
 			n.setCurrent(s)
 		}
 
-		err := session.run()
+		done := make(chan error, 1)
+		go func() { done <- session.run() }()
+		var err error
+		select {
+		case err = <-done:
+		case <-session.ended:
+			go func() {
+				log.Info().Err(<-done).Str("jid", session.mucJID.Full()).Msg("Previous NWWS-IO session finished closing")
+			}()
+		}
 		n.setCurrent(nil)
 		if ctx.Err() != nil {
 			return nil
@@ -156,11 +173,8 @@ func newNWWSSession(username, password string, router *xmpp.Router, monitor *muc
 		Domain:   "conference.nwws-oi.weather.gov",
 		Resource: fmt.Sprintf("%s-%s", username, instanceID),
 	}
-	return &nwwsSession{
-		client:  xmppClient,
-		manager: xmpp.NewStreamManager(xmppClient, func(s xmpp.Sender) { onNWWSConnected(s, monitor, room) }),
-		mucJID:  room,
-	}, nil
+	manager := xmpp.NewStreamManager(xmppClient, func(s xmpp.Sender) { onNWWSConnected(s, monitor, room) })
+	return newSession(manager, xmppClient, room), nil
 }
 
 func newNWWSRouter(client *SeabirdClient, monitor *mucMonitor) *xmpp.Router {

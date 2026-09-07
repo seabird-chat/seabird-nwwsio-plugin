@@ -10,7 +10,10 @@ import (
 	"gosrc.io/xmpp/stanza"
 )
 
-type fakeStreamClient struct{ connectErr error }
+type fakeStreamClient struct {
+	connectErr     error
+	disconnectWait <-chan struct{} // Disconnect blocks until this closes
+}
 
 func (f *fakeStreamClient) Connect() error           { return f.connectErr }
 func (f *fakeStreamClient) Resume() error            { return f.connectErr }
@@ -18,17 +21,57 @@ func (f *fakeStreamClient) Send(stanza.Packet) error { return nil }
 func (f *fakeStreamClient) SendIQ(context.Context, *stanza.IQ) (chan stanza.IQ, error) {
 	return nil, nil
 }
-func (f *fakeStreamClient) SendRaw(string) error         { return nil }
-func (f *fakeStreamClient) Disconnect() error            { return nil }
+func (f *fakeStreamClient) SendRaw(string) error { return nil }
+func (f *fakeStreamClient) Disconnect() error {
+	if f.disconnectWait != nil {
+		<-f.disconnectWait
+	}
+	return nil
+}
 func (f *fakeStreamClient) SetHandler(xmpp.EventHandler) {}
 
 func fakeSession(connectErr error) *nwwsSession {
-	fake := &fakeStreamClient{connectErr: connectErr}
-	return &nwwsSession{
-		client:  fake,
-		manager: xmpp.NewStreamManager(fake, nil),
-		mucJID:  &stanza.Jid{Node: "nwws", Domain: "conference.nwws-oi.weather.gov", Resource: "test"},
+	return fakeSessionFor(&fakeStreamClient{connectErr: connectErr})
+}
+
+func fakeSessionFor(fake *fakeStreamClient) *nwwsSession {
+	return newSession(xmpp.NewStreamManager(fake, nil), fake, &stanza.Jid{Node: "nwws", Domain: "conference.nwws-oi.weather.gov", Resource: "test"})
+}
+
+func TestNWWSSessionsDoNotWaitForASlowTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	release := make(chan struct{})
+	built := make(chan *nwwsSession, 2)
+	builds := 0
+	n := &nwwsSessions{
+		build: func() (*nwwsSession, error) {
+			builds++
+			var s *nwwsSession
+			if builds == 1 {
+				s = fakeSessionFor(&fakeStreamClient{disconnectWait: release})
+			} else {
+				s = fakeSession(nil)
+			}
+			built <- s
+			return s, nil
+		},
+		wait: noWait,
 	}
+	go n.run(ctx)
+
+	first := <-built
+	waitUntilRunning(t, first)
+	n.stop()
+	select {
+	case <-built:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rebuild waited for the old session's teardown")
+	}
+	close(release)
+	cancel()
+	n.stop()
 }
 
 func waitUntilRunning(t *testing.T, s *nwwsSession) {

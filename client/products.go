@@ -74,8 +74,10 @@ func handleMessage(p stanza.Packet, client *SeabirdClient) {
 }
 
 // Sequence numbers arrive out of order by a few positions inside bursts, so a
-// number only counts as lost once the stream is well past it. The numbering
-// restarts from 1 at 00Z, which shows up as a jump far backwards.
+// number only counts as lost once the stream is well past it. A jump of
+// sequenceRestart or more in either direction is a resync, not a gap: the
+// numbering restarts from 1 at 00Z, and after a long outage the individual
+// numbers are not worth tracking.
 const (
 	sequencePatience = 50
 	sequenceRestart  = 1000
@@ -90,17 +92,20 @@ func newSequenceTracker(first int) *sequenceTracker {
 	return &sequenceTracker{next: first + 1, pending: make(map[int]bool)}
 }
 
-// observe records one sequence number and returns the numbers now given up as lost.
+// observe records one sequence number and returns the numbers now given up
+// as lost. A run of consecutive missing numbers is one outage and is given up
+// as a whole.
 func (t *sequenceTracker) observe(seq int) []int {
 	switch {
+	case seq-t.next >= sequenceRestart || t.next-seq >= sequenceRestart:
+		t.next = seq + 1
+		t.pending = make(map[int]bool)
+		return nil
 	case seq >= t.next:
 		for n := t.next; n < seq; n++ {
 			t.pending[n] = true
 		}
 		t.next = seq + 1
-	case t.next-seq > sequenceRestart:
-		t.next = seq + 1
-		t.pending = make(map[int]bool)
 	default:
 		delete(t.pending, seq)
 	}
@@ -108,10 +113,18 @@ func (t *sequenceTracker) observe(seq int) []int {
 	for n := range t.pending {
 		if t.next-n > sequencePatience {
 			lost = append(lost, n)
-			delete(t.pending, n)
 		}
 	}
+	if len(lost) == 0 {
+		return nil
+	}
 	sort.Ints(lost)
+	for n := lost[len(lost)-1] + 1; t.pending[n]; n++ {
+		lost = append(lost, n)
+	}
+	for _, n := range lost {
+		delete(t.pending, n)
+	}
 	return lost
 }
 
@@ -127,7 +140,8 @@ func (c *SeabirdClient) checkSequenceGap(processID string, sequenceID int) {
 	if lost := tracker.observe(sequenceID); len(lost) > 0 {
 		log.Warn().
 			Str("process_id", processID).
-			Ints("lost_seq", lost).
+			Int("first_lost", lost[0]).
+			Int("last_lost", lost[len(lost)-1]).
 			Int("missed_count", len(lost)).
 			Msg("Detected missed messages - sequence gap")
 	}

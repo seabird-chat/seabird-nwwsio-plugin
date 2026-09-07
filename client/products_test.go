@@ -38,6 +38,42 @@ func TestSequenceTrackerToleratesReorderingAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestSequenceTrackerReportsAContiguousGapOnce(t *testing.T) {
+	tr := newSequenceTracker(1)
+	tr.observe(2)
+	tr.observe(22) // 3..21 never arrive
+	var reports [][]int
+	for seq := 23; seq <= 21+sequencePatience+1; seq++ {
+		if lost := tr.observe(seq); len(lost) > 0 {
+			reports = append(reports, lost)
+		}
+	}
+	want := make([]int, 0, 19)
+	for n := 3; n <= 21; n++ {
+		want = append(want, n)
+	}
+	if len(reports) != 1 || !reflect.DeepEqual(reports[0], want) {
+		t.Errorf("reports = %v, want one report of 3..21", reports)
+	}
+}
+
+func TestSequenceTrackerTreatsAHugeForwardJumpAsARestart(t *testing.T) {
+	tr := newSequenceTracker(1)
+	tr.observe(2)
+	if lost := tr.observe(2 + sequenceRestart + 1); len(lost) != 0 || len(tr.pending) != 0 {
+		t.Fatalf("after huge jump: lost=%v pending=%d, want nothing tracked", lost, len(tr.pending))
+	}
+	base := 2 + sequenceRestart + 1
+	tr.observe(base + 2) // base+1 never arrives
+	var lost []int
+	for seq := base + 3; seq <= base+1+sequencePatience+1; seq++ {
+		lost = append(lost, tr.observe(seq)...)
+	}
+	if want := []int{base + 1}; !reflect.DeepEqual(lost, want) {
+		t.Errorf("lost after jump = %v, want %v", lost, want)
+	}
+}
+
 func TestSequenceTrackerFollowsANumberingRestart(t *testing.T) {
 	tr := newSequenceTracker(10480)
 	for _, seq := range []int{10481, 10482, 10483, 1, 2, 3, 5} {
